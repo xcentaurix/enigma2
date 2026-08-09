@@ -1,6 +1,6 @@
 from xml.etree.ElementTree import Element, ElementTree, fromstring
 
-from enigma import addFont, eLabel, ePixmap, ePoint, eRect, eSize, eWidget, eStack, eRectangle, eWindow, eWindowStyleManager, eWindowStyleSkinned, getDesktop, gFont, getFontFaces, gMainDC, gRGB, BT_ALPHATEST, BT_ALPHABLEND, BT_HALIGN_CENTER, BT_HALIGN_LEFT, BT_HALIGN_RIGHT, BT_KEEP_ASPECT_RATIO, BT_SCALE, BT_VALIGN_BOTTOM, BT_VALIGN_CENTER, BT_VALIGN_TOP
+from enigma import addFont, eLabel, eListbox, ePixmap, ePoint, eRect, eSize, eWidget, eStack, eRectangle, eWindow, eWindowStyleManager, eWindowStyleSkinned, getDesktop, gFont, getFontFaces, gMainDC, gRGB, BT_ALPHATEST, BT_ALPHABLEND, BT_HALIGN_CENTER, BT_HALIGN_LEFT, BT_HALIGN_RIGHT, BT_KEEP_ASPECT_RATIO, BT_SCALE, BT_VALIGN_BOTTOM, BT_VALIGN_CENTER, BT_VALIGN_TOP
 from os.path import basename, dirname, isdir, isfile, join
 from os import listdir
 
@@ -472,6 +472,22 @@ def mergeScale(s1, s2):
 	return ((s1[0][0] * s2[0][0], s1[0][1] * s2[0][1]), (s1[1][0] * s2[1][0], s1[1][1] * s2[1][1]))
 
 
+def parseInteger(value, default=0):
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		print("[Skin] Error: The value '%s' is not a valid integer, using %s!" % (value, default))
+		return default
+
+
+def parseZoom(mode, zoomType):
+	return parseOptions({
+		"zoomContent": eListbox.zoomContentZoom,
+		"moveContent": eListbox.zoomContentMove,
+		"ignoreContent": eListbox.zoomContentOff
+	}, zoomType, mode, eListbox.zoomContentZoom)
+
+
 def parseScrollbarMode(s):
 	from enigma import eListbox
 	try:
@@ -479,10 +495,14 @@ def parseScrollbarMode(s):
 			"showOnDemand": eListbox.showOnDemand,
 			"showAlways": eListbox.showAlways,
 			"showNever": eListbox.showNever,
-			"showLeft": eListbox.showLeft
+			"showLeft": eListbox.showLeftOnDemand,
+			"showLeftOnDemand": eListbox.showLeftOnDemand,
+			"showLeftAlways": eListbox.showLeftAlways,
+			"showTopOnDemand": eListbox.showTopOnDemand,
+			"showTopAlways": eListbox.showTopAlways
 		}[s]
 	except KeyError:
-		print("[Skin] Error: Invalid scrollbarMode '%s'!  Must be one of 'showOnDemand', 'showAlways', 'showNever' or 'showLeft'." % s)
+		print("[Skin] Error: Invalid scrollbarMode '%s'!  Must be one of 'showOnDemand', 'showAlways', 'showNever', 'showLeftOnDemand', 'showLeftAlways', 'showTopOnDemand' or 'showTopAlways'." % s)
 
 
 def loadPixmap(path, desktop, width=0, height=0):
@@ -501,6 +521,8 @@ def collectAttributes(skinAttributes, node, context, skinPath=None, ignore=(), f
 	size = None
 	pos = None
 	font = None
+	selectionZoom = None
+	selectionZoomSize = None
 	for attrib, value in node.items():  # Walk all attributes.
 		if attrib not in ignore:
 			if attrib in filenames:
@@ -523,8 +545,16 @@ def collectAttributes(skinAttributes, node, context, skinPath=None, ignore=(), f
 			elif attrib == "font":
 				font = value
 				skinAttributes.append((attrib, font))
+			elif attrib == "selectionZoom":
+				selectionZoom = value
+			elif attrib == "selectionZoomSize":
+				selectionZoomSize = value
 			else:
 				skinAttributes.append((attrib, value))
+	if selectionZoom is not None:  # The "selectionZoom" attribute must be after the item size attributes.
+		skinAttributes.append(("selectionZoom", selectionZoom))
+	if selectionZoomSize is not None:  # The "selectionZoomSize" attribute must be after the item size attributes.
+		skinAttributes.append(("selectionZoomSize", selectionZoomSize))
 	if pos is not None:
 		pos, size = context.parse(pos, size, font)
 		skinAttributes.append(("position", pos))
@@ -613,7 +643,10 @@ class AttributeParser:
 		self.guiObject.setFont(parseFont(value, self.scaleTuple))
 
 	def secondfont(self, value):
-		self.guiObject.setSecondFont(parseFont(value, self.scaleTuple))
+		if hasattr(self.guiObject, "setSecondFont"):
+			self.guiObject.setSecondFont(parseFont(value, self.scaleTuple))
+		elif hasattr(self.guiObject, "setValueFont"):  # eListbox renamed its "second font" concept to "value font".
+			self.guiObject.setValueFont(parseFont(value, self.scaleTuple))
 
 	def widgetBorderColor(self, value):
 		self.guiObject.setWidgetBorderColor(parseColor(value))
@@ -650,16 +683,30 @@ class AttributeParser:
 		self.guiObject.setPixmap(loadPixmap(value, self.desktop, self.guiObject.size().width(), self.guiObject.size().height()))
 
 	def backgroundPixmap(self, value):
-		self.guiObject.setBackgroundPicture(loadPixmap(value, self.desktop))
+		self.guiObject.setBackgroundPixmap(loadPixmap(value, self.desktop))
 
 	def selectionPixmap(self, value):
-		self.guiObject.setSelectionPicture(loadPixmap(value, self.desktop))
+		self.guiObject.setSelectionPixmap(loadPixmap(value, self.desktop))
 
 	def selectionPixmapLarge(self, value):
-		self.guiObject.setSelectionPictureLarge(loadPixmap(value, self.desktop))
+		pass  # Removed: eListbox no longer supports a separate large selection pixmap.
+
+	def selectionZoom(self, value):
+		data = [x.strip() for x in value.split(",")]
+		value = parseInteger(data[0], 0)
+		if value > 500:
+			value = 500
+		mode = parseZoom(data[1], "selectionZoom") if len(data) == 2 else eListbox.zoomContentZoom
+		self.guiObject.setSelectionZoom(float("%d.%02d" % ((value // 100) + 1, value % 100)), mode)
+
+	def selectionZoomSize(self, value):
+		data = [x.strip() for x in value.split(",")]
+		size = parseValuePair("%s,%s" % (data[0], data[1]), self.scaleTuple, self.guiObject, self.desktop)
+		mode = parseZoom(data[2], "selectionZoomSize") if len(data) == 3 else eListbox.zoomContentZoom
+		self.guiObject.setSelectionZoomSize(size[0], size[1], mode)
 
 	def sliderPixmap(self, value):
-		self.guiObject.setScrollbarPixmap(loadPixmap(value, self.desktop))
+		self.guiObject.setScrollbarForegroundPixmap(loadPixmap(value, self.desktop))
 
 	def scrollbarbackgroundPixmap(self, value):
 		self.guiObject.setScrollbarBackgroundPixmap(loadPixmap(value, self.desktop))
@@ -716,16 +763,21 @@ class AttributeParser:
 		self.orientation({"vertical": "orVertical", "horizontal": "orHorizontal", "grid": "orGrid"}.get(value, value))
 
 	def orientation(self, value):  # Used by eSlider and eListBox.
+		isListbox = hasattr(self.guiObject, "orGrid")  # eListbox::setOrientation takes no "swapped" argument, unlike eSlider's.
 		try:
-			self.guiObject.setOrientation(*({
+			orientationValue, swapped = ({
 				"orVertical": (self.guiObject.orVertical, False),
 				"orTopToBottom": (self.guiObject.orVertical, False),
 				"orBottomToTop": (self.guiObject.orVertical, True),
 				"orHorizontal": (self.guiObject.orHorizontal, False),
 				"orLeftToRight": (self.guiObject.orHorizontal, False),
 				"orRightToLeft": (self.guiObject.orHorizontal, True)} | (
-				{"orGrid": (self.guiObject.orGrid, False)} if hasattr(self.guiObject, "orGrid") else {}  # eListbox only
-			))[value])
+				{"orGrid": (self.guiObject.orGrid, False)} if isListbox else {}  # eListbox only
+			))[value]
+			if isListbox:
+				self.guiObject.setOrientation(orientationValue)
+			else:
+				self.guiObject.setOrientation(orientationValue, swapped)
 		except KeyError:
 			print("[Skin] Error: Invalid orientation '%s'!  Must be one of 'orVertical', 'orTopToBottom', 'orBottomToTop', 'orHorizontal', 'orLeftToRight', 'orRightToLeft' or 'orGrid (eListbox only)'." % value)
 
@@ -752,7 +804,9 @@ class AttributeParser:
 
 	def textOffset(self, value):
 		x, y = value.split(",")
-		self.guiObject.setTextOffset(ePoint(int(x) * self.scaleTuple[0][0] // self.scaleTuple[0][1], int(y) * self.scaleTuple[1][0] // self.scaleTuple[1][1]))
+		x = int(x) * self.scaleTuple[0][0] // self.scaleTuple[0][1]
+		y = int(y) * self.scaleTuple[1][0] // self.scaleTuple[1][1]
+		self.guiObject.setPadding(eRect(x, y, x, y))
 
 	def flags(self, value):
 		flags = value.split(",")
@@ -891,7 +945,7 @@ def applyScrollbar(guiObject):
 	guiObject.setScrollbarBorderColor(scrollbarStyle["borderColor"])
 	guiObject.setScrollbarForegroundColor(scrollbarStyle["foregroundColor"])
 	guiObject.setScrollbarBackgroundColor(scrollbarStyle["backgroundColor"])
-	ifHasValue(scrollbarStyle.get("pixmap"), guiObject.setScrollbarPixmap)
+	ifHasValue(scrollbarStyle.get("pixmap"), guiObject.setScrollbarForegroundPixmap)
 	ifHasValue(scrollbarStyle.get("backgroundPixmap"), guiObject.setScrollbarBackgroundPixmap)
 	guiObject.setScrollbarMode(scrollbarStyle["mode"])
 

@@ -354,7 +354,7 @@ void eListboxServiceContent::sort()
 DEFINE_REF(eListboxServiceContent);
 
 eListboxServiceContent::eListboxServiceContent()
-	:m_visual_mode(visModeSimple), m_size(0), m_current_marked(false), m_itemheight(25), m_hide_number_marker(false), m_servicetype_icon_mode(0), m_crypto_icon_mode(0), m_record_indicator_mode(0), m_column_width(0), m_progressbar_height(6), m_progressbar_border_width(2), m_nonplayable_margins(10), m_items_distances(8), m_picon_margin(0), m_sides_margin(0), m_marker_as_line(0), m_markerline_color_set(0)
+	:m_visual_mode(visModeSimple), m_size(0), m_current_marked(false), m_itemheight(25), m_hide_number_marker(false), m_servicetype_icon_mode(0), m_crypto_icon_mode(0), m_record_indicator_mode(0), m_column_width(0), m_progressbar_height(6), m_progressbar_border_width(2), m_nonplayable_margins(10), m_items_distances(8), m_picon_margin(0), m_sides_margin(0), m_marker_as_line(0), m_markerline_color_set(0), m_saved_cursor_line(0)
 {
 	memset(m_color_set, 0, sizeof(m_color_set));
 	cursorHome();
@@ -578,6 +578,16 @@ void eListboxServiceContent::cursorRestore()
 	m_saved_cursor = m_list.end();
 }
 
+void eListboxServiceContent::cursorSaveLine(int line)
+{
+	m_saved_cursor_line = line;
+}
+
+int eListboxServiceContent::cursorRestoreLine()
+{
+	return m_saved_cursor_line;
+}
+
 int eListboxServiceContent::size()
 {
 	int size = 0;
@@ -714,24 +724,24 @@ void eListboxServiceContent::paint(gPainter &painter, eWindowStyle &style, const
 		if (selected)
 		{
 			/* if we have a local background color set, use that. */
-			if (local_style->m_background_color_selected_set)
+			if (local_style->is_set.background_color_selected)
 				painter.setBackgroundColor(local_style->m_background_color_selected);
 			/* same for foreground */
-			if (local_style->m_foreground_color_selected_set)
+			if (local_style->is_set.foreground_color_selected)
 				painter.setForegroundColor(local_style->m_foreground_color_selected);
 		}
 		else
 		{
 			/* if we have a local background color set, use that. */
-			if (local_style->m_background_color_set)
+			if (local_style->is_set.background_color)
 				painter.setBackgroundColor(local_style->m_background_color);
 			/* same for foreground */
-			if (local_style->m_foreground_color_set)
+			if (local_style->is_set.foreground_color)
 				painter.setForegroundColor(local_style->m_foreground_color);
 		}
 	}
 
-	if (!local_style || !local_style->m_transparent_background)
+	if (!local_style || !local_style->is_set.transparent_background)
 		/* if we have no transparent background */
 	{
 		/* blit background picture, if available (otherwise, clear only) */
@@ -763,7 +773,7 @@ void eListboxServiceContent::paint(gPainter &painter, eWindowStyle &style, const
 			painter.blit(local_style->m_background, offset, eRect(), gPainter::BT_ALPHABLEND);
 		}
 
-		if (selected && !local_style->m_selection && !local_style->m_selection_large)
+		if (selected && !local_style->m_selection)
 		{
 			if (!radius)
 				painter.clear();
@@ -777,22 +787,16 @@ void eListboxServiceContent::paint(gPainter &painter, eWindowStyle &style, const
 
 	if (cursorValid())
 	{
-		
-		if (selected && local_style && local_style->m_selection && m_visual_mode != visSkinDefined)
+
+		if (selected && local_style && local_style->m_selection)
 		{
 			if (radius)
 				painter.setRadius(radius, edges);
 			painter.blit(local_style->m_selection, offset, eRect(), gPainter::BT_ALPHABLEND);
 		}
-		if (selected && local_style && local_style->m_selection_large && m_visual_mode == visSkinDefined)
-		{
-			if (radius)
-				painter.setRadius(radius, edges);
-			painter.blit(local_style->m_selection_large, offset, eRect(), gPainter::BT_ALPHABLEND);
-		}
 
 		// Draw the frame for selected item here so to be under the content
-		if (selected && (!local_style || (!local_style->m_selection && !local_style->m_selection_large)) && !radius)
+		if (selected && (!local_style || !local_style->m_selection) && !radius)
 			style.drawFrame(painter, itemRect, eWindowStyle::frameListboxEntry);
 
 		eServiceReference ref = *m_cursor;

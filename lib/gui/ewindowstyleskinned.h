@@ -13,7 +13,6 @@ public:
 	void paintWindowDecoration(eWindow *wnd, gPainter &painter, const std::string &title);
 	void paintBackground(gPainter &painter, const ePoint &offset, const eSize &size);
 	void drawFrame(gPainter &painter, const eRect &frame, int what);
-	int drawFrameRadius(gPainter &painter, const eRect &frame, int radius, uint8_t edges);
 	RESULT getFont(int what, ePtr<gFont> &font);
 #endif
 	void setStyle(gPainter &painter, int what);
@@ -58,20 +57,35 @@ public:
 
 	enum {
 		colBackground,
-		colLabelForeground,
+		colForeground,
 		colListboxBackground,
 		colListboxForeground,
-		colListboxSelectedBackground,
-		colListboxSelectedForeground,
-		colListboxMarkedBackground,
-		colListboxMarkedForeground,
-		colListboxMarkedAndSelectedBackground,
-		colListboxMarkedAndSelectedForeground,
-		colListboxSelectedBorder,
+		colListboxBackgroundSelected,
+		colListboxForegroundSelected,
+		colListboxBackgroundMarked,
+		colListboxForegroundMarked,
+		colListboxBackgroundMarkedSelected,
+		colListboxForegroundMarkedSelected,
 
 		colWindowTitleForeground,
 		colWindowTitleBackground,
+
+		colScrollbarForeground,
+		colScrollbarBackground,
+		colScrollbarBorder,
+
+		colSliderForeground,
+		colSliderBackground,
+		colSliderBorder,
+
 		colMax
+	};
+
+	enum {
+		valueEntryLeftOffset,
+		valueHeaderLeftOffset,
+		valueIndentSize,
+		valueMax
 	};
 
 	void setColor(int what, const gRGB &back);
@@ -79,6 +93,13 @@ public:
 
 	void setTitleOffset(const eSize &offset);
 	void setTitleFont(gFont *fnt);
+	void setLabelFont(gFont *fnt);
+	void setListboxFont(gFont *fnt);
+	void setEntryFont(gFont *fnt);
+	void setValueFont(gFont *fnt);
+	void setHeaderFont(gFont *fnt);
+	void setValue(int what, int value);
+	int getValue(int what);
 
 private:
 	struct borderSet
@@ -92,10 +113,10 @@ private:
 
 	gRGB m_color[colMax];
 
-	int m_listbox_border_set;
-
 	eSize m_title_offset;
-	ePtr<gFont> m_fnt;
+	ePtr<gFont> m_fnt, m_labelfnt, m_listboxfnt, m_entryfnt, m_valuefnt, m_headerfnt;
+
+	int m_values[valueMax] = {15, 15};
 
 	void drawBorder(gPainter &painter, const eRect &size, struct borderSet &border, int where, int flags);
 };
