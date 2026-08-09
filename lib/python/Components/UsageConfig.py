@@ -1,14 +1,18 @@
 import io
+import json
 import locale
 import os
+import re
 import skin
+import time
 
 from enigma import eDVBDB, eEPGCache, setTunerTypePriorityOrder, setPreferredTuner, setSpinnerOnOff, setEnableTtCachingOnOff, eEnv, Misc_Options, eServiceEvent
 
 from Components.Harddisk import harddiskmanager
 from Components.config import config, ConfigBoolean, ConfigDictionarySet, ConfigDirectory, ConfigInteger, ConfigIP, ConfigLocations, ConfigNumber, ConfigPassword, ConfigSelection, ConfigSelectionNumber, ConfigSet, ConfigSubsection, ConfigText, ConfigYesNo, NoSave
+from Components.Language import language
 from Tools.camcontrol import CamControl
-from Tools.Directories import resolveFilename, SCOPE_HDD, SCOPE_TIMESHIFT, defaultRecordingLocation
+from Tools.Directories import resolveFilename, SCOPE_HDD, SCOPE_LANGUAGE, SCOPE_TIMESHIFT, defaultRecordingLocation
 from Components.NimManager import nimmanager
 from Components.ServiceList import refreshServiceList
 from Components.SystemInfo import SystemInfo, MODEL
@@ -27,6 +31,225 @@ def raw_stderr_print(text):
 
 originalAudioTracks = "orj dos ory org esl qaa qaf und mis mul ORY ORJ Audio_ORJ oth"
 visuallyImpairedCommentary = "NAR qad"
+
+
+# config.usage.date.dayfull holds a strftime() pattern built from weekday (%A),
+# day (%d/%-d), month (%B/%m/%-m) and year (%Y/%y) tokens - and may or may not
+# start with a weekday token at all, since babel's "long"/"medium"/"short" CLDR
+# tiers don't carry one (only "full" does). The functions below derive the
+# shortdayfull/daylong/dayshortfull/dayshort/daysmall/full/long/short variants from
+# it structurally (token + separator manipulation), tolerating either shape, instead
+# of hand-maintaining a table of every combination. Weekday/month names localize on
+# their own via strftime()/LC_TIME (see Components.Language), so none of this needs
+# translation.
+_DATE_FORMAT_TOKEN_RE = re.compile(r'%A|%-?d|%B|%-?m|%Y|%y')
+_DATE_FORMAT_ABBREV = {"%A": "%a", "%B": "%b"}
+_DATE_FORMAT_ATTRS = ("shortdayfull", "daylong", "dayshortfull", "dayshort", "daysmall", "full", "long", "short")
+_YEAR_TOKENS = ("%Y", "%y")
+
+
+def _parseDateFormat(fmt):
+	return _DATE_FORMAT_TOKEN_RE.findall(fmt), _DATE_FORMAT_TOKEN_RE.split(fmt)
+
+
+def _dropDateFormatToken(tokens, seps, idx):
+	tokens, seps = tokens[:], seps[:]
+	if idx == len(tokens) - 1:
+		del seps[idx]
+	else:
+		del seps[idx + 1]
+	del tokens[idx]
+	return tokens, seps
+
+
+def _renderDateFormat(tokens, seps):
+	out = seps[0]
+	for t, s in zip(tokens, seps[1:]):
+		out += t + s
+	return out
+
+
+def deriveDateFormats(dayfull):
+	tokens, seps = _parseDateFormat(dayfull)
+	day_idx = next(i for i, t in enumerate(tokens) if t in ("%d", "%-d"))
+	year_idx = next(i for i, t in enumerate(tokens) if t in _YEAR_TOKENS)
+	has_weekday = bool(tokens) and tokens[0] in ("%A", "%a")
+
+	shortdayfull = _renderDateFormat([_DATE_FORMAT_ABBREV.get(tokens[0], tokens[0])] + tokens[1:], seps)
+	daylong = _renderDateFormat([_DATE_FORMAT_ABBREV.get(t, t) for t in tokens], seps)
+
+	t2, s2 = _dropDateFormatToken(tokens, seps, year_idx)
+	dayshortfull = _renderDateFormat(t2, s2)
+	dayshort = _renderDateFormat([_DATE_FORMAT_ABBREV.get(t, t) for t in t2], s2)
+
+	daysmall = ("%a " + tokens[day_idx]) if has_weekday else tokens[day_idx]
+
+	t3, s3 = _dropDateFormatToken(tokens, seps, 0) if has_weekday else (tokens, seps)
+	full = _renderDateFormat(t3, s3)
+	long_ = _renderDateFormat([_DATE_FORMAT_ABBREV.get(t, t) for t in t3], s3)
+
+	y3 = next(i for i, t in enumerate(t3) if t in _YEAR_TOKENS)
+	t4, s4 = _dropDateFormatToken(t3, s3, y3)
+	short = _renderDateFormat([_DATE_FORMAT_ABBREV.get(t, t) for t in t4], s4)
+
+	return dict(zip(_DATE_FORMAT_ATTRS, (shortdayfull, daylong, dayshortfull, dayshort, daysmall, full, long_, short)))
+
+
+# config.usage.time.mixed/short are derived from config.usage.time.long the same way
+# the date fields are derived from dayfull: mechanically, by dropping/keeping the
+# seconds token. "mixed" keeps seconds for 24-hour formats but drops them for 12-hour
+# ones (matching the pre-CLDR behavior this replaces) - "short" always drops them.
+# Unlike dayfull's tokens, seconds sits in the *middle* of the pattern (between minutes
+# and an AM/PM marker or timezone), so - unlike _dropDateFormatToken - the separator to
+# drop is always the one *before* the token, keeping the one after it: dropping "%S"
+# from "%-I:%M:%S %p" must yield "%-I:%M %p", not "%-I:%M:%p".
+_TIME_FORMAT_TOKEN_RE = re.compile(r'%-?H|%-?I|%-?M|%-?S|%p|%Z')
+
+
+def deriveTimeFormats(longPattern):
+	tokens = _TIME_FORMAT_TOKEN_RE.findall(longPattern)
+	seps = _TIME_FORMAT_TOKEN_RE.split(longPattern)
+	is12Hour = "%I" in tokens or "%-I" in tokens
+
+	seconds_idx = next((i for i, t in enumerate(tokens) if t in ("%S", "%-S")), None)
+	if seconds_idx is None:
+		short = longPattern
+	else:
+		t2 = tokens[:seconds_idx] + tokens[seconds_idx + 1:]
+		s2 = seps[:seconds_idx] + seps[seconds_idx + 1:]
+		short = _renderDateFormat(t2, s2)
+
+	mixed = short if is12Hour else longPattern
+	return {"mixed": mixed, "short": short}
+
+
+# CLDR supplies the locale-correct date/time format *choices* directly - its own
+# full/long/medium/short tiers, converted to strftime, with no reshaping of our own.
+# The patterns are extracted once at build time from babel/CLDR into
+# po/cldr-date-time.json (see po/Makefile.am) - there is no runtime dependency on
+# babel, loading that ~7KB file is all this does at runtime.
+# cccc/ccc/c is CLDR's "standalone" weekday form (used by e.g. Finnish); we render it
+# the same as EEEE/E since strftime has no separate standalone/format distinction.
+# G is an era designator (e.g. Thai's Buddhist-calendar patterns) - dropped rather than
+# mistranslated, since we only ever render Gregorian years (%Y), we have no era value
+# to substitute; this is a known, deliberate simplification, not a full CLDR era mapping.
+_CLDR_TOKEN_RE = re.compile(r"EEEE|EEE|E|cccc|ccc|c|MMMM|MMM|MM|M|dd|d|yyyy|yy|y|HH|H|hh|h|mm|m|ss|s|a|zzzz|z|G+|'[^']*'")
+_CLDR_TO_STRFTIME = {
+	"EEEE": "%A", "EEE": "%a", "E": "%a",
+	"cccc": "%A", "ccc": "%a", "c": "%a",
+	"MMMM": "%B", "MMM": "%b", "MM": "%m", "M": "%-m",
+	"dd": "%d", "d": "%-d",
+	"yyyy": "%Y", "yy": "%y", "y": "%Y",
+	"HH": "%H", "H": "%-H", "hh": "%I", "h": "%-I",
+	"mm": "%M", "m": "%-M", "ss": "%S", "s": "%-S",
+	"a": "%p", "zzzz": "%Z", "z": "%Z",
+}
+_CLDR_TIERS = ("full", "long", "medium", "short")
+_CLDR_TIER_LABELS = {"full": _("Full"), "long": _("Long"), "medium": _("Medium"), "short": _("Short")}
+_CLDR_FALLBACK_CHOICES = {
+	"date": [("%A %-d %B %Y", _CLDR_TIER_LABELS["full"])],
+	"time": [("%T", _CLDR_TIER_LABELS["medium"])],
+}
+_cldrDateTimeTable = None
+
+
+def _cldrToken(match):
+	token = match.group(0)
+	if token.startswith("'"):
+		return token.strip("'")
+	if token.startswith("G"):
+		return ""
+	return _CLDR_TO_STRFTIME[token]
+
+
+def _cldrToStrftime(pattern):
+	return _CLDR_TOKEN_RE.sub(_cldrToken, pattern)
+
+
+def _loadCldrDateTimeTable():
+	global _cldrDateTimeTable
+	if _cldrDateTimeTable is None:
+		try:
+			with open(resolveFilename(SCOPE_LANGUAGE, "cldr-date-time.json"), "r", encoding="utf-8") as f:
+				_cldrDateTimeTable = json.load(f)
+		except (OSError, ValueError):
+			_cldrDateTimeTable = {}
+	return _cldrDateTimeTable
+
+
+def _cldrPatternsForLocale(kind, localeTag):
+	table = _loadCldrDateTimeTable().get(kind, {})
+	return table.get(localeTag) or table.get((localeTag or "").split("_")[0]) or table.get("en")
+
+
+def currentLocaleTag():
+	return language.getLanguage() or "en_US"
+
+
+def _formatPreview(pattern):
+	try:
+		return time.strftime(pattern, time.localtime())
+	except ValueError:
+		return pattern
+
+
+# CLDR patterns for some locales embed formatting marks - e.g. RLM (U+200F) around
+# Arabic's numeric slashes, NNBSP (U+202F) before Bulgarian/Russian/Ukrainian's era
+# suffix or before English/Arabic's AM/PM marker - that matter for correctly rendered
+# running text but are dead weight (and an unknown-glyph risk on an embedded font stack
+# we can't verify here) in a short Setup list label. These are stripped/normalized in
+# the *label* only; the actual pattern fed to deriveDateFormats()/deriveTimeFormats()
+# and used for real rendering is untouched.
+_LABEL_MAX_LEN = 40
+_LABEL_STRIP_RE = re.compile("[\u200e\u200f]")  # LRM, RLM
+_LABEL_NNBSP_RE = re.compile("\u202f")  # narrow no-break space
+
+
+def _sanitizeLabel(text):
+	text = _LABEL_NNBSP_RE.sub(" ", _LABEL_STRIP_RE.sub("", text))
+	if len(text) > _LABEL_MAX_LEN:
+		text = text[:_LABEL_MAX_LEN - 1].rstrip() + "…"
+	return text
+
+
+def _cldrChoicesForLocale(kind, localeTag):
+	# just the active language's own full/long/medium/short tiers - deduplicated by
+	# resulting strftime pattern in case two tiers coincide for a given locale. Each
+	# choice is labeled with what it actually looks like today (sanitized/capped to fit
+	# the single-line Setup row - see data/setup.xml's "Date style"/"Time style" items),
+	# rendered through strftime, rather than a generic "Full"/"Long"/"Medium"/"Short"
+	# tier name - those tier names don't reliably indicate which is more detailed
+	# (CLDR's "long" is not the longest; "full" is).
+	patterns = _cldrPatternsForLocale(kind, localeTag)
+	if not patterns:
+		return _CLDR_FALLBACK_CHOICES[kind]
+	seen = {}
+	for tier in _CLDR_TIERS:
+		pattern = patterns.get(tier)
+		if not pattern:
+			continue
+		strftimePattern = _cldrToStrftime(pattern)
+		if strftimePattern not in seen:
+			seen[strftimePattern] = _sanitizeLabel(_formatPreview(strftimePattern))
+	return list(seen.items())
+
+
+def dayfullChoicesForLocale(localeTag):
+	return _cldrChoicesForLocale("date", localeTag)
+
+
+def timeChoicesForLocale(localeTag):
+	return _cldrChoicesForLocale("time", localeTag)
+
+
+def cldrPatternForTier(kind, localeTag, tier):
+	# looks up one specific tier's pattern directly - used to pick a default choice
+	# (e.g. time's "medium") without relying on fragile label-text matching, now that
+	# labels are rendered previews rather than fixed tier names.
+	patterns = _cldrPatternsForLocale(kind, localeTag)
+	if not patterns or tier not in patterns:
+		return _CLDR_FALLBACK_CHOICES[kind][0][0]
+	return _cldrToStrftime(patterns[tier])
 
 
 def InitUsageConfig():
@@ -445,100 +668,24 @@ def InitUsageConfig():
 	config.usage.time.wide = NoSave(ConfigBoolean(default=False))
 	config.usage.time.wide_display = NoSave(ConfigBoolean(default=False))
 
-	# TRANSLATORS: full date representation dayname daynum monthname year in strftime() format! See 'man strftime'
-	config.usage.date.dayfull = ConfigSelection(default=_("%A %-d %B %Y"), choices=[
-		(_("%A %d %B %Y"), _("Dayname DD Month Year")),
-		(_("%A %d. %B %Y"), _("Dayname DD. Month Year")),
-		(_("%A %-d %B %Y"), _("Dayname D Month Year")),
-		(_("%A %-d. %B %Y"), _("Dayname D. Month Year")),
-		(_("%A %d-%B-%Y"), _("Dayname DD-Month-Year")),
-		(_("%A %-d-%B-%Y"), _("Dayname D-Month-Year")),
-		(_("%A %d/%m/%Y"), _("Dayname DD/MM/Year")),
-		(_("%A %d.%m.%Y"), _("Dayname DD.MM.Year")),
-		(_("%A %-d/%m/%Y"), _("Dayname D/MM/Year")),
-		(_("%A %-d.%m.%Y"), _("Dayname D.MM.Year")),
-		(_("%A %d/%-m/%Y"), _("Dayname DD/M/Year")),
-		(_("%A %d.%-m.%Y"), _("Dayname DD.M.Year")),
-		(_("%A %-d/%-m/%Y"), _("Dayname D/M/Year")),
-		(_("%A %-d.%-m.%Y"), _("Dayname D.M.Year")),
-		(_("%A %B %d %Y"), _("Dayname Month DD Year")),
-		(_("%A %B %-d %Y"), _("Dayname Month D Year")),
-		(_("%A %B-%d-%Y"), _("Dayname Month-DD-Year")),
-		(_("%A %B-%-d-%Y"), _("Dayname Month-D-Year")),
-		(_("%A %m/%d/%Y"), _("Dayname MM/DD/Year")),
-		(_("%A %-m/%d/%Y"), _("Dayname M/DD/Year")),
-		(_("%A %m/%-d/%Y"), _("Dayname MM/D/Year")),
-		(_("%A %-m/%-d/%Y"), _("Dayname M/D/Year")),
-		(_("%A %Y %B %d"), _("Dayname Year Month DD")),
-		(_("%A %Y %B %-d"), _("Dayname Year Month D")),
-		(_("%A %Y-%B-%d"), _("Dayname Year-Month-DD")),
-		(_("%A %Y-%B-%-d"), _("Dayname Year-Month-D")),
-		(_("%A %Y/%m/%d"), _("Dayname Year/MM/DD")),
-		(_("%A %Y/%m/%-d"), _("Dayname Year/MM/D")),
-		(_("%A %Y/%-m/%d"), _("Dayname Year/M/DD")),
-		(_("%A %Y/%-m/%-d"), _("Dayname Year/M/D"))
-	])
+	# NOTE: choice ids come from CLDR for the active locale's own full/long/medium/short
+	# tiers (see dayfullChoicesForLocale()). Labels are live-rendered examples
+	# ("Wednesday, 12 August 2026"), not translated text. Because both the ids and the
+	# label previews are locale-dependent, the whole choice list is rebuilt on a runtime
+	# OSD language change - see language.addCallback() below.
+	dayfullChoices = dayfullChoicesForLocale(currentLocaleTag())
+	config.usage.date.dayfull = ConfigSelection(default=dayfullChoices[0][0], choices=dayfullChoices)
 
-	# TRANSLATORS: long date representation short dayname daynum monthname year in strftime() format! See 'man strftime'
-	config.usage.date.shortdayfull = ConfigText(default=_("%a %-d %B %Y"))
+	# NOTE: older builds stored a hand-picked, translated pattern string as the
+	# persisted value. That string won't match any current (CLDR-derived) choice, so
+	# ConfigSelection.setValue() falls back to the default on load, i.e. a user's
+	# custom dayfull selection resets once on upgrade.
 
-	# TRANSLATORS: long date representation short dayname daynum short monthname year in strftime() format! See 'man strftime'
-	config.usage.date.daylong = ConfigText(default=_("%a %-d %b %Y"))
-
-	# TRANSLATORS: short date representation dayname daynum short monthname in strftime() format! See 'man strftime'
-	config.usage.date.dayshortfull = ConfigText(default=_("%A %-d %B"))
-
-	# TRANSLATORS: short date representation short dayname daynum short monthname in strftime() format! See 'man strftime'
-	config.usage.date.dayshort = ConfigText(default=_("%a %-d %b"))
-
-	# TRANSLATORS: small date representation short dayname daynum in strftime() format! See 'man strftime'
-	config.usage.date.daysmall = ConfigText(default=_("%a %-d"))
-
-	# TRANSLATORS: full date representation daynum monthname year in strftime() format! See 'man strftime'
-	config.usage.date.full = ConfigText(default=_("%-d %B %Y"))
-
-	# TRANSLATORS: long date representation daynum short monthname year in strftime() format! See 'man strftime'
-	config.usage.date.long = ConfigText(default=_("%-d %b %Y"))
-
-	# TRANSLATORS: small date representation daynum short monthname in strftime() format! See 'man strftime'
-	config.usage.date.short = ConfigText(default=_("%-d %b"))
+	for attr, value in deriveDateFormats(config.usage.date.dayfull.default).items():
+		setattr(config.usage.date, attr, ConfigText(default=value))
 
 	def setDateStyles(configElement):
-		dateStyles = {
-			# dayfull            shortdayfull      daylong           dayshortfull   dayshort       daysmall    full           long           short
-			_("%A %d %B %Y"): (_("%a %d %B %Y"), _("%a %d %b %Y"), _("%A %d %B"), _("%a %d %b"), _("%a %d"), _("%d %B %Y"), _("%d %b %Y"), _("%d %b")),
-			_("%A %d. %B %Y"): (_("%a %d. %B %Y"), _("%a %d. %b %Y"), _("%A %d. %B"), _("%a %d. %b"), _("%a %d"), _("%d. %B %Y"), _("%d. %b %Y"), _("%d. %b")),
-			_("%A %-d %B %Y"): (_("%a %-d %B %Y"), _("%a %-d %b %Y"), _("%A %-d %B"), _("%a %-d %b"), _("%a %-d"), _("%-d %B %Y"), _("%-d %b %Y"), _("%-d %b")),
-			_("%A %-d. %B %Y"): (_("%a %-d. %B %Y"), _("%a %-d. %b %Y"), _("%A %-d. %B"), _("%a %-d. %b"), _("%a %-d"), _("%-d. %B %Y"), _("%-d. %b %Y"), _("%-d. %b")),
-			_("%A %d-%B-%Y"): (_("%a %d-%B-%Y"), _("%a %d-%b-%Y"), _("%A %d-%B"), _("%a %d-%b"), _("%a %d"), _("%d-%B-%Y"), _("%d-%b-%Y"), _("%d-%b")),
-			_("%A %-d-%B-%Y"): (_("%a %-d-%B-%Y"), _("%a %-d-%b-%Y"), _("%A %-d-%B"), _("%a %-d-%b"), _("%a %-d"), _("%-d-%B-%Y"), _("%-d-%b-%Y"), _("%-d-%b")),
-			_("%A %d/%m/%Y"): (_("%a %d/%m/%Y"), _("%a %d/%m/%Y"), _("%A %d/%m"), _("%a %d/%m"), _("%a %d"), _("%d/%m/%Y"), _("%d/%m/%Y"), _("%d/%m")),
-			_("%A %d.%m.%Y"): (_("%a %d.%m.%Y"), _("%a %d.%m.%Y"), _("%A %d.%m"), _("%a %d.%m"), _("%a %d"), _("%d.%m.%Y"), _("%d.%m.%Y"), _("%d.%m")),
-			_("%A %-d/%m/%Y"): (_("%a %-d/%m/%Y"), _("%a %-d/%m/%Y"), _("%A %-d/%m"), _("%a %-d/%m"), _("%a %-d"), _("%-d/%m/%Y"), _("%-d/%m/%Y"), _("%-d/%m")),
-			_("%A %-d.%m.%Y"): (_("%a %-d.%m.%Y"), _("%a %-d.%m.%Y"), _("%A %-d.%m"), _("%a %-d.%m"), _("%a %-d"), _("%-d.%m.%Y"), _("%-d.%m.%Y"), _("%-d.%m")),
-			_("%A %d/%-m/%Y"): (_("%a %d/%-m/%Y"), _("%a %d/%-m/%Y"), _("%A %d/%-m"), _("%a %d/%-m"), _("%a %d"), _("%d/%-m/%Y"), _("%d/%-m/%Y"), _("%d/%-m")),
-			_("%A %d.%-m.%Y"): (_("%a %d.%-m.%Y"), _("%a %d.%-m.%Y"), _("%A %d.%-m"), _("%a %d.%-m"), _("%a %d"), _("%d.%-m.%Y"), _("%d.%-m.%Y"), _("%d.%-m")),
-			_("%A %-d/%-m/%Y"): (_("%a %-d/%-m/%Y"), _("%a %-d/%-m/%Y"), _("%A %-d/%-m"), _("%a %-d/%-m"), _("%a %-d"), _("%-d/%-m/%Y"), _("%-d/%-m/%Y"), _("%-d/%-m")),
-			_("%A %-d.%-m.%Y"): (_("%a %-d.%-m.%Y"), _("%a %-d.%-m.%Y"), _("%A %-d.%-m"), _("%a %-d.%-m"), _("%a %-d"), _("%-d.%-m.%Y"), _("%-d.%-m.%Y"), _("%-d.%-m")),
-			_("%A %B %d %Y"): (_("%a %B %d %Y"), _("%a %b %d %Y"), _("%A %B %d"), _("%a %b %d"), _("%a %d"), _("%B %d %Y"), _("%b %d %Y"), _("%b %d")),
-			_("%A %B %-d %Y"): (_("%a %B %-d %Y"), _("%a %b %-d %Y"), _("%A %B %-d"), _("%a %b %-d"), _("%a %-d"), _("%B %-d %Y"), _("%b %-d %Y"), _("%b %-d")),
-			_("%A %B-%d-%Y"): (_("%a %B-%d-%Y"), _("%a %b-%d-%Y"), _("%A %B-%d"), _("%a %b-%d"), _("%a %d"), _("%B-%d-%Y"), _("%b-%d-%Y"), _("%b-%d")),
-			_("%A %B-%-d-%Y"): (_("%a %B-%-d-%Y"), _("%a %b-%-d-%Y"), _("%A %B-%-d"), _("%a %b-%-d"), _("%a %-d"), _("%B-%-d-%Y"), _("%b-%-d-%Y"), _("%b-%-d")),
-			_("%A %m/%d/%Y"): (_("%a %m/%d/%Y"), _("%a %m/%d/%Y"), _("%A %m/%d"), _("%a %m/%d"), _("%a %d"), _("%m/%d/%Y"), _("%m/%d/%Y"), _("%m/%d")),
-			_("%A %-m/%d/%Y"): (_("%a %-m/%d/%Y"), _("%a %-m/%d/%Y"), _("%A %-m/%d"), _("%a %-m/%d"), _("%a %d"), _("%-m/%d/%Y"), _("%-m/%d/%Y"), _("%-m/%d")),
-			_("%A %m/%-d/%Y"): (_("%a %m/%-d/%Y"), _("%a %m/%-d/%Y"), _("%A %m/%-d"), _("%a %m/%-d"), _("%a %-d"), _("%m/%-d/%Y"), _("%m/%-d/%Y"), _("%m/%-d")),
-			_("%A %-m/%-d/%Y"): (_("%a %-m/%-d/%Y"), _("%a %-m/%-d/%Y"), _("%A %-m/%-d"), _("%a %-m/%-d"), _("%a %-d"), _("%-m/%-d/%Y"), _("%-m/%-d/%Y"), _("%-m/%-d")),
-			_("%A %Y %B %d"): (_("%a %Y %B %d"), _("%a %Y %b %d"), _("%A %B %d"), _("%a %b %d"), _("%a %d"), _("%Y %B %d"), _("%Y %b %d"), _("%b %d")),
-			_("%A %Y %B %-d"): (_("%a %Y %B %-d"), _("%a %Y %b %-d"), _("%A %B %-d"), _("%a %b %-d"), _("%a %-d"), _("%Y %B %-d"), _("%Y %b %-d"), _("%b %-d")),
-			_("%A %Y-%B-%d"): (_("%a %Y-%B-%d"), _("%a %Y-%b-%d"), _("%A %B-%d"), _("%a %b-%d"), _("%a %d"), _("%Y-%B-%d"), _("%Y-%b-%d"), _("%b-%d")),
-			_("%A %Y-%B-%-d"): (_("%a %Y-%B-%-d"), _("%a %Y-%b-%-d"), _("%A %B-%-d"), _("%a %b-%-d"), _("%a %-d"), _("%Y-%B-%-d"), _("%Y-%b-%-d"), _("%b-%-d")),
-			_("%A %Y/%m/%d"): (_("%a %Y/%m/%d"), _("%a %Y/%m/%d"), _("%A %m/%d"), _("%a %m/%d"), _("%a %d"), _("%Y/%m/%d"), _("%Y/%m/%d"), _("%m/%d")),
-			_("%A %Y/%m/%-d"): (_("%a %Y/%m/%-d"), _("%a %Y/%m/%-d"), _("%A %m/%-d"), _("%a %m/%-d"), _("%a %-d"), _("%Y/%m/%-d"), _("%Y/%m/%-d"), _("%m/%-d")),
-			_("%A %Y/%-m/%d"): (_("%a %Y/%-m/%d"), _("%a %Y/%-m/%d"), _("%A %-m/%d"), _("%a %-m/%d"), _("%a %d"), _("%Y/%-m/%d"), _("%Y/%-m/%d"), _("%-m/%d")),
-			_("%A %Y/%-m/%-d"): (_("%a %Y/%-m/%-d"), _("%a %Y/%-m/%-d"), _("%A %-m/%-d"), _("%a %-m/%-d"), _("%a %-d"), _("%Y/%-m/%-d"), _("%Y/%-m/%-d"), _("%-m/%-d"))
-		}
-		style = dateStyles.get(configElement.value, ((_("Invalid"),) * 8))
-		for attr, value in zip(("shortdayfull", "daylong", "dayshortfull", "dayshort", "daysmall", "full", "long", "short"), style):
+		for attr, value in deriveDateFormats(configElement.value).items():
 			element = getattr(config.usage.date, attr)
 			element.value = value
 			element.save()
@@ -546,51 +693,38 @@ def InitUsageConfig():
 	config.usage.date.dayfull.addNotifier(setDateStyles)
 
 	# TRANSLATORS: full time representation hour:minute:seconds
-	if locale.nl_langinfo(locale.AM_STR) and locale.nl_langinfo(locale.PM_STR):
-		config.usage.time.long = ConfigSelection(default=_("%T"), choices=[
-			(_("%T"), _("HH:mm:ss")),
-			(_("%-H:%M:%S"), _("H:mm:ss")),
-			(_("%I:%M:%S%^p"), _("hh:mm:ssAM/PM")),
-			(_("%-I:%M:%S%^p"), _("h:mm:ssAM/PM")),
-			(_("%I:%M:%S%P"), _("hh:mm:ssam/pm")),
-			(_("%-I:%M:%S%P"), _("h:mm:ssam/pm")),
-			(_("%I:%M:%S"), _("hh:mm:ss")),
-			(_("%-I:%M:%S"), _("h:mm:ss"))
-		])
-	else:
-		config.usage.time.long = ConfigSelection(default=_("%T"), choices=[
-			(_("%T"), _("HH:mm:ss")),
-			(_("%-H:%M:%S"), _("H:mm:ss")),
-			(_("%I:%M:%S"), _("hh:mm:ss")),
-			(_("%-I:%M:%S"), _("h:mm:ss"))
-		])
+	# NOTE: choice ids come from CLDR the same way dayfull's do (see po/cldr-date-time.json) -
+	# CLDR already encodes whether a locale conventionally uses a 12- or 24-hour clock (it
+	# picks "h" vs "H" per locale), so unlike the previous design this no longer needs to
+	# branch on locale.nl_langinfo(AM_STR/PM_STR) to decide which choices to offer.
+	timeChoices = timeChoicesForLocale(currentLocaleTag())
+	timeDefault = cldrPatternForTier("time", currentLocaleTag(), "medium")
+	config.usage.time.long = ConfigSelection(default=timeDefault, choices=timeChoices)
 
-	# TRANSLATORS: time representation hour:minute:seconds for 24 hour clock or 12 hour clock without AM/PM and hour:minute for 12 hour clocks with AM/PM
-	config.usage.time.mixed = ConfigText(default=_("%T"))
+	# TRANSLATORS: time representation hour:minute:seconds for 24 hour clock or hour:minute for 12 hour clock
+	config.usage.time.mixed = ConfigText(default=deriveTimeFormats(config.usage.time.long.default)["mixed"])
 
 	# TRANSLATORS: short time representation hour:minute (Same as "Default")
-	config.usage.time.short = ConfigText(default=_("%R"))
+	config.usage.time.short = ConfigText(default=deriveTimeFormats(config.usage.time.long.default)["short"])
 
 	def setTimeStyles(configElement):
-		timeStyles = {
-			# long      mixed    short
-			_("%T"): (_("%T"), _("%R")),
-			_("%-H:%M:%S"): (_("%-H:%M:%S"), _("%-H:%M")),
-			_("%I:%M:%S%^p"): (_("%I:%M%^p"), _("%I:%M%^p")),
-			_("%-I:%M:%S%^p"): (_("%-I:%M%^p"), _("%-I:%M%^p")),
-			_("%I:%M:%S%P"): (_("%I:%M%P"), _("%I:%M%P")),
-			_("%-I:%M:%S%P"): (_("%-I:%M%P"), _("%-I:%M%P")),
-			_("%I:%M:%S"): (_("%I:%M:%S"), _("%I:%M")),
-			_("%-I:%M:%S"): (_("%-I:%M:%S"), _("%-I:%M"))
-		}
-		style = timeStyles.get(configElement.value, ((_("Invalid"),) * 2))
-		for attr, value in zip(("mixed", "short"), style):
+		derived = deriveTimeFormats(configElement.value)
+		for attr in ("mixed", "short"):
 			element = getattr(config.usage.time, attr)
-			element.value = value
+			element.value = derived[attr]
 			element.save()
-		config.usage.time.wide.value = style[1].endswith(("P", "p"))
+		config.usage.time.wide.value = "%p" in derived["short"]
 
 	config.usage.time.long.addNotifier(setTimeStyles)
+
+	def onLanguageChanged():
+		newDateChoices = dayfullChoicesForLocale(currentLocaleTag())
+		config.usage.date.dayfull.setChoices(newDateChoices, default=newDateChoices[0][0])
+		newTimeChoices = timeChoicesForLocale(currentLocaleTag())
+		newTimeDefault = cldrPatternForTier("time", currentLocaleTag(), "medium")
+		config.usage.time.long.setChoices(newTimeChoices, default=newTimeDefault)
+
+	language.addCallback(onLanguageChanged)
 
 	try:
 		dateEnabled, timeEnabled = skin.parameters.get("AllowUserDatesAndTimes", (0, 0))
