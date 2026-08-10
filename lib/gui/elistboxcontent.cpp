@@ -208,6 +208,8 @@ void eListboxPythonStringContent::paint(gPainter &painter, eWindowStyle &style, 
 		itemZoomed = local_style->m_selection_zoom > 1.0;
 		radius = local_style->cornerRadius(selected ? 1 : 0);
 		edges = local_style->cornerRadiusEdges(selected ? 1 : 0);
+		if (selected && itemZoomed)
+			radius = (int)(radius * local_style->m_selection_zoom + 0.5f);
 
 		if (selected && itemZoomed && local_style->is_set.zoom_content)
 			fnt = local_style->m_font_zoomed;
@@ -325,7 +327,9 @@ void eListboxPythonStringContent::paint(gPainter &painter, eWindowStyle &style, 
 		}
 	}
 	// Draw frame here so to be under the content
-	if (selected && (!local_style || !local_style->m_selection) && (!local_style || !local_style->is_set.border))
+	// Skip the square pixmap-based frame when a rounded corner is already drawn for this item,
+	// otherwise its sharp corners overlay/cancel the rounding.
+	if (selected && (!local_style || !local_style->m_selection) && (!local_style || !local_style->is_set.border) && !radius)
 		style.drawFrame(painter, eRect(offs, itemRect.size()), eWindowStyle::frameListboxEntry);
 
 	if (validitem)
@@ -879,7 +883,9 @@ void eListboxPythonConfigContent::paint(gPainter &painter, eWindowStyle &style, 
 	}
 
 	// Draw frame here so to be drawn under icons
-	if (selected && (!local_style || !local_style->m_selection) && (!local_style || !local_style->is_set.border))
+	// Skip the square pixmap-based frame when a rounded corner is already drawn for this item,
+	// otherwise its sharp corners overlay/cancel the rounding.
+	if (selected && (!local_style || !local_style->m_selection) && (!local_style || !local_style->is_set.border) && !radius)
 		style.drawFrame(painter, eRect(offset, m_itemsize), eWindowStyle::frameListboxEntry);
 	if (m_list && cursorValid)
 	{
@@ -1582,6 +1588,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 	bool itemZoomed = false;
 	bool itemZoomContent = false;
 	bool marked = false;
+	bool hasRoundedCorner = false;
 	gRGB defaultForeColor;
 	gRGB defaultBackColor;
 
@@ -1645,6 +1652,9 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 		mode += (marked) ? 2 : 0;
 		int radius = local_style->cornerRadius(mode);
 		uint8_t edges = local_style->cornerRadiusEdges(mode);
+		if (selected && itemZoomed)
+			radius = (int)(radius * local_style->m_selection_zoom + 0.5f);
+		hasRoundedCorner = radius > 0;
 		if (radius || local_style->m_gradient_set[mode])
 		{
 			if (radius) {
@@ -1670,7 +1680,9 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 		clearRegion(painter, style, local_style, ePyObject(), ePyObject(), ePyObject(), ePyObject(), selected, marked, itemregion, sel_clip, offs, itemRect.size(), cursorValid, true, orientation, even);
 
 	// Draw frame here so to be under the content
-	if (selected && !sel_clip.valid() && (!local_style || !local_style->m_selection) && (!local_style || !local_style->is_set.border))
+	// Skip the square pixmap-based frame when a rounded corner is already drawn for this item,
+	// otherwise its sharp corners overlay/cancel the rounding.
+	if (selected && !sel_clip.valid() && (!local_style || !local_style->m_selection) && (!local_style || !local_style->is_set.border) && !hasRoundedCorner)
 		style.drawFrame(painter, eRect(offs, itemRect.size()), eWindowStyle::frameListboxEntry);
 
 	ePyObject items, buildfunc_ret;
@@ -1837,6 +1849,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 					y = (y * local_style->m_selection_zoom) + offs.y();
 					width *= local_style->m_selection_zoom;
 					height *= local_style->m_selection_zoom;
+					cornerRadius = (int)(cornerRadius * local_style->m_selection_zoom + 0.5f);
 				}
 				else
 				{
@@ -2025,6 +2038,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 					y = (y * local_style->m_selection_zoom) + offs.y();
 					width *= local_style->m_selection_zoom;
 					height *= local_style->m_selection_zoom;
+					radius = (int)(radius * local_style->m_selection_zoom + 0.5f);
 				}
 				else
 				{
@@ -2282,6 +2296,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 					y = (y * local_style->m_selection_zoom) + offs.y();
 					width *= local_style->m_selection_zoom;
 					height *= local_style->m_selection_zoom;
+					radius = (int)(radius * local_style->m_selection_zoom + 0.5f);
 				}
 				else
 				{
@@ -2523,6 +2538,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 					y = (y * local_style->m_selection_zoom) + offs.y();
 					width *= local_style->m_selection_zoom;
 					height *= local_style->m_selection_zoom;
+					radius = (int)(radius * local_style->m_selection_zoom + 0.5f);
 				}
 				else
 				{
@@ -2661,6 +2677,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 					y = (y * local_style->m_selection_zoom) + offs.y();
 					width *= local_style->m_selection_zoom;
 					height *= local_style->m_selection_zoom;
+					radius = (int)(radius * local_style->m_selection_zoom + 0.5f);
 				}
 				else
 				{

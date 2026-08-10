@@ -101,12 +101,10 @@ class TemplatedMultiContent(StringList):
 				for index, font in enumerate(fonts):
 					self.content.setFont(index, font)
 			self.content.setTemplate(template)
-			print("[TemplatedMultiContent] DIAG setTemplate orientation=%s itemwidth=%s itemheight=%s" % (orientation, itemwidth, itemheight))
 			if orientation is not None:  # May also be set independently via the widget's own "listOrientation" skin attribute.
 				self.content.setOrientation(self.orientations.get(orientation, self.orientations["orVertical"]))
 			if itemwidth is not None:
 				self.content.setItemWidth(int(itemwidth))
-				print("[TemplatedMultiContent] DIAG setItemWidth(%d) called" % int(itemwidth))
 			self.content.setItemHeight(int(itemheight))
 			self.selectionEnabled = selectionEnabled
 			self.scrollbarMode = scrollbarMode
