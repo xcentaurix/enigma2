@@ -693,11 +693,19 @@ class AttributeParser:
 
 	def selectionZoom(self, value):
 		data = [x.strip() for x in value.split(",")]
-		value = parseInteger(data[0], 0)
-		if value > 500:
-			value = 500
+		if "." in data[0]:  # Plain decimal multiplier, e.g. selectionZoom="1.1".
+			try:
+				zoom = float(data[0])
+			except ValueError:
+				print("[Skin] Error: The value '%s' is not a valid zoom factor, using 1.0!" % data[0])
+				zoom = 1.0
+		else:  # Integer percentage, e.g. selectionZoom="10" -> 1.10.
+			value = parseInteger(data[0], 0)
+			if value > 500:
+				value = 500
+			zoom = float("%d.%02d" % ((value // 100) + 1, value % 100))
 		mode = parseZoom(data[1], "selectionZoom") if len(data) == 2 else eListbox.zoomContentZoom
-		self.guiObject.setSelectionZoom(float("%d.%02d" % ((value // 100) + 1, value % 100)), mode)
+		self.guiObject.setSelectionZoom(zoom, mode)
 
 	def selectionZoomSize(self, value):
 		data = [x.strip() for x in value.split(",")]
