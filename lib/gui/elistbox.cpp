@@ -1336,6 +1336,42 @@ void eListbox::moveSelection(int dir)
 		invalidate();
 		return;
 	}
+
+	// Resolve orientation-aware navigation actions (see the ListboxActions map in keymap.xml)
+	// to a concrete move direction based on the current orientation.
+	switch (dir)
+	{
+	case moveStart:
+		dir = moveTop;
+		break;
+	case prevItem:
+		dir = (m_orientation == orHorizontal) ? moveLeft : moveUp;
+		break;
+	case nextItem:
+		dir = (m_orientation == orHorizontal) ? moveRight : moveDown;
+		break;
+	case prevPage:
+		dir = (m_orientation == orHorizontal) ? movePageLeft : movePageUp;
+		break;
+	case nextPage:
+		dir = (m_orientation == orHorizontal) ? movePageRight : movePageDown;
+		break;
+	case prevItemPage:
+		dir = (m_orientation == orHorizontal) ? movePageLeft : moveUp;
+		break;
+	case nextItemPage:
+		dir = (m_orientation == orHorizontal) ? movePageRight : moveDown;
+		break;
+	case prevPageItem:
+		dir = (m_orientation == orHorizontal) ? moveLeft : movePageUp;
+		break;
+	case nextPageItem:
+		dir = (m_orientation == orHorizontal) ? moveRight : movePageDown;
+		break;
+	default:
+		break;
+	}
+
 	// patch pageUp / pageDown for virtual listbox if native keys enabled
 	if (m_orientation == orVertical && m_native_keys_bound)
 	{

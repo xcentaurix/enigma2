@@ -1234,8 +1234,18 @@ def loadSingleSkinData(desktop, screenID, domSkin, pathSkin, scope=SCOPE_CURRENT
 					except Exception:
 						pass
 				# print("[Skin] DEBUG: WindowStyle borderset name, filename - '%s' '%s'." % (bpName, filename))
+		colorNameConversions = {
+			"LabelForeground": "Foreground",
+			"ListboxMarkedBackground": "ListboxBackgroundMarked",
+			"ListboxMarkedForeground": "ListboxForegroundMarked",
+			"ListboxMarkedAndSelectedBackground": "ListboxBackgroundMarkedSelected",
+			"ListboxMarkedAndSelectedForeground": "ListboxForegroundMarkedSelected",
+			"ListboxSelectedBackground": "ListboxBackgroundSelected",
+			"ListboxSelectedForeground": "ListboxForegroundSelected"
+		}
 		for color in tag.findall("color"):
 			colorType = color.attrib.get("name")
+			colorType = colorNameConversions.get(colorType, colorType)
 			color = parseColor(color.attrib.get("color"))
 			try:
 				style.setColor(eWindowStyleSkinned.__dict__["col" + colorType], color)

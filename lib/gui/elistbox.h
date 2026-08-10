@@ -9,8 +9,8 @@
 class eListbox;
 class eSlider;
 
-/* Hand-extracted from oatv-enigma2's lib/gui/elabel.h (the eLabel "scroll text" feature) —
-   eListbox only needs the config struct itself, not the rest of eLabel's scrolling machinery. */
+/* Hand-extracted from oatv-enigma2 lib/gui/elabel.h, the eLabel scroll text feature.
+   eListbox only needs the config struct itself, not the rest of eLabel scrolling machinery. */
 struct eScrollConfig
 {
 	enum
@@ -54,7 +54,7 @@ public:
 	   cursors never invalidate - they can become invalid
 	   when stuff is removed. Cursors will always try
 	   to stay on the same data, however when the current
-	   item is removed, this won't work. you'll be notified
+	   item is removed, this will not work. you will be notified
 	   anyway. */
 #ifndef SWIG
 protected:
@@ -257,8 +257,8 @@ public:
 	enum
 	{
 		zoomContentZoom, // zoom all the content based on zoom level
-		zoomContentMove, // don't zoom the content and move the left/top position of the content
-		zoomContentOff	 // don't zoom the content and leave the left/top position of the content
+		zoomContentMove, // do not zoom the content and move the left/top position of the content
+		zoomContentOff	 // do not zoom the content and leave the left/top position of the content
 	};
 
 	void setItemAlignment(int align);
@@ -312,7 +312,19 @@ public:
 		movePageRight,			// for future use
 		moveEnd = moveBottom,	// deprecated
 		pageUp = movePageUp,	// deprecated
-		pageDown = movePageDown // deprecated
+		pageDown = movePageDown, // deprecated
+
+		// Orientation-aware navigation actions, see the ListboxActions map in keymap.xml.
+		// Resolved to a concrete move direction in moveSelection based on m_orientation.
+		moveStart,	// always: go to the very first entry
+		prevItem,	// always: move by one entry, backward
+		nextItem,	// always: move by one entry, forward
+		prevPage,	// always: move by one page, backward
+		nextPage,	// always: move by one page, forward
+		prevItemPage, // item-move (up) when vertical/grid, page-move (left) when horizontal
+		nextItemPage, // item-move (down) when vertical/grid, page-move (right) when horizontal
+		prevPageItem, // page-move (up) when vertical/grid, item-move (left) when horizontal
+		nextPageItem  // page-move (down) when vertical/grid, item-move (right) when horizontal
 	};
 
 	void setItemHeight(int h);
@@ -531,7 +543,7 @@ public:
 #ifndef SWIG
 	struct eListboxStyle *getLocalStyle(void);
 
-	/* entryAdded: an entry was added *before* the given index. it's index is the given number. */
+	/* entryAdded: an entry was added *before* the given index. its index is the given number. */
 	void entryAdded(int index);
 	/* entryRemoved: an entry with the given index was removed. */
 	void entryRemoved(int index);

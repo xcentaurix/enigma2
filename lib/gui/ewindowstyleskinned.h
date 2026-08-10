@@ -58,14 +58,21 @@ public:
 	enum {
 		colBackground,
 		colForeground,
+		colLabelForeground = colForeground,  // Deprecated alias, use colForeground.
 		colListboxBackground,
 		colListboxForeground,
 		colListboxBackgroundSelected,
+		colListboxSelectedBackground = colListboxBackgroundSelected,  // Deprecated alias, use colListboxBackgroundSelected.
 		colListboxForegroundSelected,
+		colListboxSelectedForeground = colListboxForegroundSelected,  // Deprecated alias, use colListboxForegroundSelected.
 		colListboxBackgroundMarked,
+		colListboxMarkedBackground = colListboxBackgroundMarked,  // Deprecated alias, use colListboxBackgroundMarked.
 		colListboxForegroundMarked,
+		colListboxMarkedForeground = colListboxForegroundMarked,  // Deprecated alias, use colListboxForegroundMarked.
 		colListboxBackgroundMarkedSelected,
+		colListboxMarkedAndSelectedBackground = colListboxBackgroundMarkedSelected,  // Deprecated alias, use colListboxBackgroundMarkedSelected.
 		colListboxForegroundMarkedSelected,
+		colListboxMarkedAndSelectedForeground = colListboxForegroundMarkedSelected,  // Deprecated alias, use colListboxForegroundMarkedSelected.
 
 		colWindowTitleForeground,
 		colWindowTitleBackground,
