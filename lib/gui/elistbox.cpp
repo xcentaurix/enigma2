@@ -1593,6 +1593,8 @@ void eListbox::moveSelection(int dir)
 			newSel = m_content->cursorGet();
 		} while (newSel != oldSel && !m_content->currentCursorSelectable());
 		break;
+	case movePageLeft:
+		[[fallthrough]];
 	case movePageUp:
 	{
 		int pageind;
@@ -1632,6 +1634,8 @@ void eListbox::moveSelection(int dir)
 		} while (newSel == prevSel);
 		break;
 	}
+	case movePageRight:
+		[[fallthrough]];
 	case movePageDown:
 	{
 		int pageind;
