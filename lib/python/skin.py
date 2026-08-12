@@ -663,6 +663,12 @@ class AttributeParser:
 	def itemWidth(self, value):
 		self.guiObject.setItemWidth(self.applyHorizontalScale(parseScale(value)))
 
+	def itemSpacing(self, value):
+		data = [x.strip() for x in value.split(",")]
+		innerOnly = len(data) > 2 and parseBoolean("itemSpacing", data[2])
+		x, y = parseValuePair("%s,%s" % (data[0], data[1]), self.scaleTuple, self.guiObject, self.desktop)
+		self.guiObject.setItemSpacing(ePoint(x, y), innerOnly)
+
 	def itemCornerRadius(self, value):
 		radius, edgeValue = parseRadius(value)
 		self.guiObject.setItemCornerRadius(radius, edgeValue)

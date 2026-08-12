@@ -38,12 +38,3 @@ aclocal-copy
 compile
 .dirstamp
 mipsel-oe-linux-libtool
-lint.txt
-__pycache__/
-*.pyc
-**/am--include-marker
-**/#
-/data/iso-639-3.pck
-/hotplug/bdpoll
-/hotplug/hotplug_e2_helper
-/lib/timeshift/createapscfiles

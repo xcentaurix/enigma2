@@ -2615,7 +2615,11 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 
 				/* don't do anything if we have 'None' as pixmap */
 				if (!ppixmap || ppixmap == Py_None)
+				{
+					eDebug("[eListboxPythonMultiContent] DIAG paintPixmap cursor=%d result=SKIP_NONE (region left uncleared/undrawn)", cursor);
 					continue;
+				}
+				eDebug("[eListboxPythonMultiContent] DIAG paintPixmap cursor=%d result=OK ppixmap=%p", cursor, static_cast<void *>((PyObject *)ppixmap));
 
 				int x = PyFloat_Check(px) ? (int)PyFloat_AsDouble(px) : PyLong_AsLong(px);
 

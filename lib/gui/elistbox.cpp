@@ -299,11 +299,10 @@ void eListbox::moveSelection(int dir)
 #ifdef USE_LIBVUGLES2
 	m_dir = dir;
 #endif
-	if (isGrid)
-		eDebug("[eListbox] DIAG pre-switch: dir=%d isMoveUp=%d isMoveDown=%d isMoveLeft=%d isMoveRight=%d isJustCheck=%d isMoveTop=%d isMoveBottom=%d "
-			"oldSel=%d oldRow=%d oldColumn=%d contentSize=%d m_max_columns=%d cursorValidNow=%d selectableNow=%d",
-			dir, dir == moveUp, dir == moveDown, dir == moveLeft, dir == moveRight, dir == justCheck, dir == moveTop, dir == moveBottom,
-			oldSel, oldRow, oldColumn, m_content->size(), m_max_columns, m_content->cursorValid(), m_content->currentCursorSelectable());
+	eDebug("[eListbox] DIAG pre-switch: orientation=%d dir=%d isMoveUp=%d isMoveDown=%d isMoveLeft=%d isMoveRight=%d isJustCheck=%d isMoveTop=%d isMoveBottom=%d "
+		"oldSel=%d oldRow=%d oldColumn=%d contentSize=%d m_max_columns=%d m_max_rows=%d cursorValidNow=%d selectableNow=%d scrollMode=%d",
+		m_orientation, dir, dir == moveUp, dir == moveDown, dir == moveLeft, dir == moveRight, dir == justCheck, dir == moveTop, dir == moveBottom,
+		oldSel, oldRow, oldColumn, m_content->size(), m_max_columns, m_max_rows, m_content->cursorValid(), m_content->currentCursorSelectable(), m_scrollbar_scroll);
 	switch (dir)
 	{
 	case moveFirst:
@@ -612,9 +611,8 @@ void eListbox::moveSelection(int dir)
 		}
 
 	}
-	if (m_orientation == orGrid)
-		eDebug("[eListbox] DIAG moveSelection end: dir=%d oldSel=%d m_selected=%d oldTop=%d m_top=%d byLineBlockEntered=%d maxItems=%d",
-			dir, oldSel, m_selected, oldTop, m_top, (m_scrollbar_scroll == byLine && m_content->size() > maxItems), maxItems);
+	eDebug("[eListbox] DIAG moveSelection end: orientation=%d dir=%d oldSel=%d m_selected=%d oldTop=%d m_top=%d oldLeft=%d m_left=%d byLineBlockEntered=%d maxItems=%d contentSize=%d",
+		m_orientation, dir, oldSel, m_selected, oldTop, m_top, oldLeft, m_left, (m_scrollbar_scroll == byLine && m_content->size() > maxItems), maxItems, m_content->size());
 
 	// if it is, then the old selection clip is irrelevant, clear it or we'll get artifacts
 	if (m_orientation == orHorizontal)
@@ -1214,6 +1212,13 @@ int eListbox::event(int event, void *data, void *data2)
 
 			entryRect = eRect(posx + xOffset, posy + yOffset, m_style.m_selection_width, m_style.m_selection_height);
 			gRegion entry_clip_rect = paint_region & entryRect;
+
+			if (m_orientation == orGrid)
+				eDebug("[eListbox] DIAG paintCell i=%d entryRect=(%d,%d,%d,%d) selWH=(%d,%d) itemWH=(%d,%d) paint_region_extends=(%d,%d,%d,%d) entry_clip_empty=%d",
+					i, entryRect.extends.left(), entryRect.extends.top(), entryRect.extends.width(), entryRect.extends.height(),
+					m_style.m_selection_width, m_style.m_selection_height, m_itemwidth, m_itemheight,
+					paint_region.extends.left(), paint_region.extends.top(), paint_region.extends.width(), paint_region.extends.height(),
+					entry_clip_rect.empty());
 
 			if (!entry_clip_rect.empty())
 			{
