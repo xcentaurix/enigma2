@@ -742,7 +742,16 @@ class AttributeParser:
 			print("[Skin] Error: Invalid alphatest '%s'!  Must be one of 'on', 'off' or 'blend'." % value)
 
 	def scale(self, value):
-		self.guiObject.setScale(int(parseBoolean("scale", value)))
+		modes = {
+			"fill": BT_SCALE,
+			"stretch": BT_SCALE,
+			"aspect": BT_SCALE | BT_KEEP_ASPECT_RATIO,
+			"centerScaled": BT_SCALE | BT_KEEP_ASPECT_RATIO | BT_HALIGN_CENTER | BT_VALIGN_CENTER,
+		}
+		if value in modes:
+			self.guiObject.setPixmapScale(modes[value])
+		else:
+			self.guiObject.setScale(int(parseBoolean("scale", value)))
 
 	def scaleFlags(self, value):
 		base = BT_SCALE | BT_KEEP_ASPECT_RATIO
