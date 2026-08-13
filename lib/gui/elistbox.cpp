@@ -244,10 +244,10 @@ void eListbox::moveSelection(int dir)
 		dir = moveTop;
 		break;
 	case prevItem:
-		dir = (m_orientation == orHorizontal) ? moveLeft : moveUp;
+		dir = (m_orientation == orHorizontal || m_orientation == orGrid) ? moveLeft : moveUp;
 		break;
 	case nextItem:
-		dir = (m_orientation == orHorizontal) ? moveRight : moveDown;
+		dir = (m_orientation == orHorizontal || m_orientation == orGrid) ? moveRight : moveDown;
 		break;
 	case prevPage:
 		dir = (m_orientation == orHorizontal) ? movePageLeft : movePageUp;

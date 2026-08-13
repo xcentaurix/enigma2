@@ -323,8 +323,8 @@ public:
 		nextPage,	// always: move by one page, forward
 		prevItemPage, // item-move (up) when vertical/grid, page-move (left) when horizontal
 		nextItemPage, // item-move (down) when vertical/grid, page-move (right) when horizontal
-		prevPageItem, // page-move (up) when vertical/grid, item-move (left) when horizontal
-		nextPageItem  // page-move (down) when vertical/grid, item-move (right) when horizontal
+		prevPageItem, // page-move (up) when vertical, item-move (left) when horizontal/grid
+		nextPageItem  // page-move (down) when vertical, item-move (right) when horizontal/grid
 	};
 
 	void setItemHeight(int h);
