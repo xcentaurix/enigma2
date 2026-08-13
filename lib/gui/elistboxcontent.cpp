@@ -470,6 +470,9 @@ void eListboxPythonStringContent::setList(ePyObject list) {
 		Py_INCREF(m_list);
 	}
 
+	eDebug("[eListbox] DIAG eListboxPythonStringContent::setList called: m_listbox=%p newSize=%d",
+		(void*)m_listbox, m_list ? (int)PyList_Size(m_list) : -1);
+
 	if (m_listbox)
 		m_listbox->entryReset(false);
 

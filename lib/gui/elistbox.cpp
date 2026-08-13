@@ -1680,6 +1680,8 @@ void eListbox::entryAdded(int index)
 
 void eListbox::entryRemoved(int index)
 {
+	eDebug("[eListbox] DIAG entryRemoved called: index=%d m_selected=%d contentSize=%d",
+		index, m_selected, m_content ? m_content->size() : -1);
 	m_first_selectable_item = -1;
 	m_last_selectable_item = -1;
 
@@ -1735,6 +1737,8 @@ void eListbox::entryChanged(int index)
 
 void eListbox::entryReset(bool selectionHome)
 {
+	eDebug("[eListbox] DIAG entryReset called: selectionHome=%d m_selected=%d contentSize=%d",
+		selectionHome, m_selected, m_content ? m_content->size() : -1);
 	m_first_selectable_item = -1;
 	m_last_selectable_item = -1;
 	m_content_changed = true;

@@ -310,9 +310,6 @@ public:
 		moveLast,				// for future use
 		movePageLeft,			// for future use
 		movePageRight,			// for future use
-		moveEnd = moveBottom,	// deprecated
-		pageUp = movePageUp,	// deprecated
-		pageDown = movePageDown, // deprecated
 
 		// Orientation-aware navigation actions, see the ListboxActions map in keymap.xml.
 		// Resolved to a concrete move direction in moveSelection based on m_orientation.
@@ -324,7 +321,16 @@ public:
 		prevItemPage, // item-move (up) when vertical/grid, page-move (left) when horizontal
 		nextItemPage, // item-move (down) when vertical/grid, page-move (right) when horizontal
 		prevPageItem, // page-move (up) when vertical, item-move (left) when horizontal/grid
-		nextPageItem  // page-move (down) when vertical, item-move (right) when horizontal/grid
+		nextPageItem, // page-move (down) when vertical, item-move (right) when horizontal/grid
+
+		// Deprecated aliases - kept last so they do not reset the auto-increment
+		// counter for the real values above. An explicit assignment on an
+		// enumerator restarts auto-increment from that value plus one for
+		// whatever follows it, which used to make moveStart alias the
+		// justCheck value here.
+		moveEnd = moveBottom,	// deprecated
+		pageUp = movePageUp,	// deprecated
+		pageDown = movePageDown // deprecated
 	};
 
 	void setItemHeight(int h);
