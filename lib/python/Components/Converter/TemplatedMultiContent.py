@@ -101,8 +101,9 @@ class TemplatedMultiContent(StringList):
 				for index, font in enumerate(fonts):
 					self.content.setFont(index, font)
 			self.content.setTemplate(template)
-			if orientation is not None and itemwidth is not None:
+			if orientation is not None:  # May also be set independently via the widget's own "listOrientation" skin attribute.
 				self.content.setOrientation(self.orientations.get(orientation, self.orientations["orVertical"]))
+			if itemwidth is not None:
 				self.content.setItemWidth(int(itemwidth))
 			self.content.setItemHeight(int(itemheight))
 			self.selectionEnabled = selectionEnabled
