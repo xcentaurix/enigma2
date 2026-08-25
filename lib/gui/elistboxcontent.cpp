@@ -949,7 +949,8 @@ static ePyObject resolveDataIndex(ePyObject data, long index)
 	PyObject *result = PyTuple_GetItem(data, index);
 	if (!result)
 	{
-		PyErr_Print();
+		PyErr_Clear();
+		eDebug("[eListboxPythonMultiContent] row index %ld out of range (row has %zd entries)", index, PyTuple_Check(data) ? PyTuple_Size(data) : -1);
 		return ePyObject(Py_None);
 	}
 	return ePyObject(result);
