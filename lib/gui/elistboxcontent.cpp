@@ -934,6 +934,27 @@ static void clearRegion(gPainter &painter, eWindowStyle &style, eListboxStyle *l
 	}
 }
 
+/* PyTuple_GetItem is bounds-checked: an out-of-range index raises IndexError
+   and returns NULL. Every "row index reference" lookup below (text=N,
+   png=N, negative percent=-N, MultiContentTemplateColor(N), ...) used to
+   ignore that, so a bad skin index - a typo, or a row shorter than the
+   template expects - left a live IndexError sitting in the interpreter's
+   error state until some unrelated later Python/C++ call tripped over it,
+   surfacing as a confusing crash blamed on whatever ran next rather than on
+   the actual mistake. Route these lookups through here: clear the dangling
+   error and fall back to Py_None, which every caller already treats as
+   "nothing to draw here". */
+static ePyObject resolveDataIndex(ePyObject data, long index)
+{
+	PyObject *result = PyTuple_GetItem(data, index);
+	if (!result)
+	{
+		PyErr_Print();
+		return ePyObject(Py_None);
+	}
+	return ePyObject(result);
+}
+
 static ePyObject lookupColor(ePyObject color, ePyObject data)
 {
 	if (color == Py_None)
@@ -948,9 +969,10 @@ static ePyObject lookupColor(ePyObject color, ePyObject data)
 	if (data && (icolor & 0xFF000000) == 0xFF000000)
 	{
 		int index = icolor & 0xFFFFFF;
-		if (PyTuple_GetItem(data, index) == Py_None)
+		ePyObject value = resolveDataIndex(data, index);
+		if (value == Py_None)
 			return ePyObject();
-		return PyTuple_GetItem(data, index);
+		return value;
 	}
 
 	if (color == Py_None)
@@ -1037,7 +1059,7 @@ int eListboxPythonMultiContent::getMaxItemTextWidth()
 					ePyObject px = PyTuple_GET_ITEM(item, 1), pfnt = PyTuple_GET_ITEM(item, 5), pstring = PyTuple_GET_ITEM(item, 7);
 
 					if (PyLong_Check(pstring) && data) /* if the string is in fact a number, it refers to the 'data' list. */
-						pstring = PyTuple_GetItem(data, PyLong_AsLong(pstring));
+						pstring = resolveDataIndex(data, PyLong_AsLong(pstring));
 
 					if (pfnt) {
 						int fnt_i = PyLong_AsLong(pfnt);
@@ -1267,7 +1289,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 					pTextBorderColor = lookupColor(PyTuple_GET_ITEM(item, 17), data);
 
 				if (PyLong_Check(pstring) && data) /* if the string is in fact a number, it refers to the 'data' list. */
-					pstring = PyTuple_GetItem(data, PyLong_AsLong(pstring));
+					pstring = resolveDataIndex(data, PyLong_AsLong(pstring));
 
 							/* don't do anything if we have 'None' as string */
 				if (pstring == Py_None)
@@ -1450,7 +1472,10 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 				uint8_t cornerEdges = pCornerEdges ? PyLong_AsLong(pCornerEdges) : 15;
 
 				if ((filled < 0) && data) /* if the string is in a negative number, it refers to the 'data' list. */
-					filled = PyLong_AsLong(PyTuple_GetItem(data, -filled));
+				{
+					ePyObject pfilled = resolveDataIndex(data, -filled);
+					filled = (pfilled == Py_None) ? -1 : PyLong_AsLong(pfilled);
+				}
 
 							/* don't do anything if percent out of range */
 				if ((filled < 0) || (filled > 100))
@@ -1505,7 +1530,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 				{
 					ePtr<gPixmap> pixmap;
 					if (PyLong_Check(ppixmap) && data) /* if the pixmap is in fact a number, it refers to the data list */
-						ppixmap = PyTuple_GetItem(data, PyLong_AsLong(ppixmap));
+						ppixmap = resolveDataIndex(data, PyLong_AsLong(ppixmap));
 
 					if (SwigFromPython(pixmap, ppixmap))
 					{
@@ -1757,7 +1782,7 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 				}
 
 				if (PyLong_Check(ppixmap) && data) /* if the pixmap is in fact a number, it refers to the 'data' list. */
-					ppixmap = PyTuple_GetItem(data, PyLong_AsLong(ppixmap));
+					ppixmap = resolveDataIndex(data, PyLong_AsLong(ppixmap));
 
 							/* don't do anything if we have 'None' as pixmap */
 				if (ppixmap == Py_None)
