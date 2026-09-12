@@ -8,9 +8,20 @@
 #include <GLES2/gl2.h>
 #endif
 
-// drm/drm_fourcc.h's DRM_FORMAT_ARGB8888 - matches what gTextureManager (see
-// gtexture_manager.cpp) already assumes for enigma2's own 32bpp surfaces.
-#define DRM_FORMAT_ARGB8888 0x34325241
+// drm/drm_fourcc.h's DRM_FORMAT_ABGR8888. A diagnostic pass (comparing
+// known-good source-image RGB values against the bytes actually handed to
+// glTexImage2D/glTexSubImage2D for both text and picon uploads) proved the
+// GPU texture pipeline puts the right byte in the right place every time -
+// so the visible R/B swap users saw was never in texture uploads at all.
+// This is the one remaining untested link: it tells the vendor's native-
+// pixmap EGL surface how to interpret the live scanout framebuffer memory
+// that GL renders directly into and the display controller reads from.
+// ARGB8888 (memory order B,G,R,A) matched gTextureManager's own BGRA
+// assumption for enigma2 surfaces, but that's a fact about *enigma2's* CPU
+// pixmaps, not about what this SoC's display plane actually expects -
+// several Broadcom-based STB graphics stacks are known to swap R/B in their
+// hardware compositor's native order. Try ABGR8888 (memory order R,G,B,A).
+#define DRM_FORMAT_ABGR8888 0x34324241
 
 DreamboxWindowProvider::DreamboxWindowProvider() {
 	memset(&m_pixmap, 0, sizeof(m_pixmap));
@@ -23,9 +34,39 @@ DreamboxWindowProvider::~DreamboxWindowProvider() {
 bool DreamboxWindowProvider::init(int width, int height) {
 	fbClass* fb = fbClass::getInstance();
 	if (!fb) {
-		eDebug("[DreamboxWindowProvider] no fbClass instance available");
+		// gFBDC (the classic gDC) is not built when EGL is enabled (see
+		// lib/gdi/Makefile.inc) - it used to be the sole owner of fbClass's
+		// construction (gFBDC::gFBDC() does "fb = new fbClass;"), so we take
+		// over that responsibility here since we're now the sole consumer of
+		// the live framebuffer.
+		fb = new fbClass;
+		if (!fb) {
+			eDebug("[DreamboxWindowProvider] failed to construct fbClass");
+			return false;
+		}
+	}
+
+	// fbClass only opens the device and reads the *boot-time* mode in its
+	// constructor - stride is left uninitialized and lfb unmapped until
+	// SetMode() actually programs the mode (this is what gFBDC::setResolution()
+	// normally does; gFBDC is not built when EGL is enabled, so we do it here).
+	// TEMPORARY DIAGNOSTIC: force single buffering to test whether
+	// triple-buffering's yres_virtual=height*3 layout is what's causing the
+	// observed horizontal-stripe repetition (i.e. whether the GPU/EGL pixmap
+	// surface is treating the whole stacked buffer as its render height
+	// instead of just our declared height).
+	if (fb->SetMode(width, height, 32, /*forceSingleBuffer=*/true) < 0) {
+		eDebug("[DreamboxWindowProvider] fbClass::SetMode(%dx%d) failed", width, height);
 		return false;
 	}
+
+	// With triple/double buffering, which page is actually scanned out is
+	// controlled independently by FBIOPAN_DISPLAY (fbClass::setOffset()) - the
+	// mmap base (fb->lfb, offset 0) is just page 0 of that larger buffer. Our
+	// pixmap always describes page 0, so pin the scanout to page 0 too,
+	// otherwise the GPU can render correctly into memory the display never
+	// actually shows (whatever page a prior boot/run last panned to).
+	fb->setOffset(0);
 
 	// Describe the *existing* live framebuffer memory as the pixmap - see the
 	// class comment for why (no separate allocation, no undocumented present
@@ -40,7 +81,7 @@ bool DreamboxWindowProvider::init(int width, int height) {
 	m_pixmap.width = (unsigned int)width;
 	m_pixmap.height = (unsigned int)height;
 	m_pixmap.pitch = fb->Stride();
-	m_pixmap.format = DRM_FORMAT_ARGB8888;
+	m_pixmap.format = DRM_FORMAT_ABGR8888;
 
 	eDebug("[DreamboxWindowProvider] init %dx%d pitch=%u phys=0x%lx", width, height, m_pixmap.pitch, (unsigned long)m_pixmap.mem.phys);
 	return true;
@@ -55,10 +96,17 @@ void* DreamboxWindowProvider::getNativePixmap() {
 }
 
 void DreamboxWindowProvider::presentPixmap() {
-	// The pixmap already IS the live display memory, so there's nothing to
-	// copy/composite - just make sure the GPU has actually finished writing
-	// into it before the next frame's commands (or the display scanout)
-	// might race it.
+	// TEST: the glReadPixels forced-copy that used to live here was added
+	// based on a readback diagnostic captured *before* the gRC-thread EGL
+	// context-affinity fix (see grc.cpp/egl_init.cpp) - at that time NOTHING
+	// rendered at all (viewport was (0,0,0,0)), so of course the native
+	// "driver writes directly into the described pixmap memory" mechanism
+	// looked broken. That was a symptom of the real bug, not proof this path
+	// is bad. Now that rendering actually happens on the correct thread with
+	// a correct viewport, trust the vendor's native pixmap-surface write
+	// mechanism again and just wait for completion - glReadPixels may have
+	// been misinterpreting this GPU's internal tiled/compressed render
+	// target layout as plain linear memory, which would explain banding.
 	glFinish();
 }
 

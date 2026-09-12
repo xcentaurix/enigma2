@@ -8,6 +8,9 @@
 #ifdef USE_LIBVUGLES2
 #include <vuplus_gles.h>
 #endif
+#ifdef HAVE_EGL
+#include <lib/gdi/egl/gegldc.h>
+#endif
 
 
 #ifndef SYNC_PAINT
@@ -128,6 +131,17 @@ void *gRC::thread()
 	{
 		gles_state_open();
 		gles_viewport(720, 576, 720 * 4);
+	}
+#endif
+#ifdef HAVE_EGL
+	// EGL contexts are bound per-thread via eglMakeCurrent(); this is the
+	// thread that actually executes every render opcode (o.dc->exec(&o)
+	// below), so the context must be made current here, not on the
+	// eInit/main thread that constructs gEGLDC (see egl_init.cpp).
+	if (gEGLDC::getInstance() && !gEGLDC::getInstance()->isInitialized())
+	{
+		if (!gEGLDC::getInstance()->initEGL())
+			eDebug("[gRC] gEGLDC::initEGL() failed on render thread.");
 	}
 #endif
 #ifndef SYNC_PAINT

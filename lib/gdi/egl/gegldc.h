@@ -56,10 +56,26 @@ private:
 	void flushTextBatch();
 	void setGlScissor(const eRect& rect);
 
-	bool isHardwareAccelerated() const override { return true; }
-	void renderGlyph(const ePoint& pos, gPixmap* glyph_mask, const gRGB& color) override;
+	// Shared by gOpcode::renderText and gOpcode::renderPara: after the
+	// existing software eTextPara::blit() path (called via gDC::exec()) has
+	// written glyphs into m_pixmap's CPU buffer, upload the affected area as
+	// a texture and composite it onto the real GPU surface - m_pixmap has no
+	// GPU hook of its own, so without this nothing drawn into it ever
+	// reaches the display.
+	void compositeTextOverlay(eRect area);
+
+	bool isHardwareAccelerated() const { return true; }
+	void renderGlyph(const ePoint& pos, gPixmap* glyph_mask, const gRGB& color);
+
+	static gEGLDC* s_instance;
 
 public:
+	// initEGL() performs eglMakeCurrent() and must be called from gRC's own
+	// render thread (see gRC::thread() in grc.cpp), NOT from the thread that
+	// constructs gEGLDC (eInit/gEGLDCAutoInit) - EGL contexts are per-thread,
+	// and gRC::thread() is the only thread that ever issues GL draw calls.
+	static gEGLDC* getInstance() { return s_instance; }
+
 	bool initEGL();
 	gEGLDC(INativeWindowProvider* window_provider = nullptr, int width = 1280, int height = 720);
 	virtual ~gEGLDC();

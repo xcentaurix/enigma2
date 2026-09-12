@@ -8,8 +8,7 @@
 // Uses layout(location=N), out vec4 frag_color
 // ---------------------------------------------------------------------------
 #if defined(HAVE_GLES3)
-static const char* vertex_shader_es3 = R"(
-    #version 300 es
+static const char* vertex_shader_es3 = R"(#version 300 es
     layout(location = 0) in vec2 position;
     uniform mat4 u_projection;
     void main() {
@@ -17,13 +16,18 @@ static const char* vertex_shader_es3 = R"(
     }
 )";
 
-static const char* fragment_shader_es3 = R"(
-    #version 300 es
+static const char* fragment_shader_es3 = R"(#version 300 es
     precision mediump float;
     uniform vec4 u_color;
     out vec4 frag_color;
     void main() {
-        frag_color = u_color;
+        // This pixmap-surface render target's GL writes end up read back
+        // as BGRA by the display scanout (proven via a ground-truth debug
+        // swatch: a plain (1,0,0,1) uniform came out blue, while textured
+        // draws - which get an equivalent correction via GL_TEXTURE_SWIZZLE
+        // in gtexture_manager.cpp - come out correct). Solid-color draws
+        // have no texture/swizzle stage to piggyback on, so swap here.
+        frag_color = u_color.bgra;
     }
 )";
 #endif
@@ -32,8 +36,7 @@ static const char* fragment_shader_es3 = R"(
 // GLES 2.0 shader sources
 // Uses attribute/varying, gl_FragColor
 // ---------------------------------------------------------------------------
-static const char* vertex_shader_es2 = R"(
-    #version 100
+static const char* vertex_shader_es2 = R"(#version 100
     attribute vec2 position;
     uniform mat4 u_projection;
     void main() {
@@ -41,12 +44,12 @@ static const char* vertex_shader_es2 = R"(
     }
 )";
 
-static const char* fragment_shader_es2 = R"(
-    #version 100
+static const char* fragment_shader_es2 = R"(#version 100
     precision mediump float;
     uniform vec4 u_color;
     void main() {
-        gl_FragColor = u_color;
+        // See the GLES3 fragment shader above for why this swap is here.
+        gl_FragColor = u_color.bgra;
     }
 )";
 
@@ -186,6 +189,20 @@ void gShader::drawRect(float x, float y, float width, float height, float r, flo
 	glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
 	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
 	glDrawArrays(GL_TRIANGLES, 0, 6);
+
+	static int s_diag_count = 0;
+	if (s_diag_count < 20 && a > 0.99f && width > 4 && height > 4) {
+		s_diag_count++;
+		GLenum err = glGetError();
+		GLenum fbstatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+		GLint viewport[4] = {0, 0, 0, 0};
+		glGetIntegerv(GL_VIEWPORT, viewport);
+		GLint fbo_binding = 0;
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo_binding);
+		eDebug("[gShader] DIAG drawRect(%.0f,%.0f,%.0fx%.0f) glGetError=0x%x fbStatus=0x%x fbo=%d viewport=(%d,%d,%d,%d)",
+			x, y, width, height, err, fbstatus, fbo_binding, viewport[0], viewport[1], viewport[2], viewport[3]);
+	}
+
 	unbindVAO();
 }
 

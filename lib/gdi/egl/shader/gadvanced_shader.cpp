@@ -6,8 +6,7 @@
 // GLES 3.0 shader sources
 // ---------------------------------------------------------------------------
 #if defined(HAVE_GLES3)
-static const char* vertex_shader_es3 = R"(
-    #version 300 es
+static const char* vertex_shader_es3 = R"(#version 300 es
     layout(location = 0) in vec2 position;
     uniform mat4 u_projection;
     out vec2 v_pos;
@@ -17,8 +16,7 @@ static const char* vertex_shader_es3 = R"(
     }
 )";
 
-static const char* fragment_shader_es3 = R"(
-    #version 300 es
+static const char* fragment_shader_es3 = R"(#version 300 es
     precision mediump float;
     
     in vec2 v_pos;
@@ -88,7 +86,11 @@ static const char* fragment_shader_es3 = R"(
             }
         }
         
-        frag_color = final_color;
+        // See gshader.cpp's fragment shader for why this swap is here -
+        // same render-target-vs-scanout channel-order mismatch applies to
+        // every solid-color/gradient draw with no texture to compensate via
+        // GL_TEXTURE_SWIZZLE.
+        frag_color = final_color.bgra;
     }
 )";
 #endif
@@ -98,8 +100,7 @@ static const char* fragment_shader_es3 = R"(
 // Note: bitwise operators on int uniforms are NOT supported in GLSL ES 1.00.
 // We replace the bitmask corner test with float comparisons using float uniforms.
 // ---------------------------------------------------------------------------
-static const char* vertex_shader_es2 = R"(
-    #version 100
+static const char* vertex_shader_es2 = R"(#version 100
     attribute vec2 position;
     uniform mat4 u_projection;
     varying vec2 v_pos;
@@ -109,8 +110,7 @@ static const char* vertex_shader_es2 = R"(
     }
 )";
 
-static const char* fragment_shader_es2 = R"(
-    #version 100
+static const char* fragment_shader_es2 = R"(#version 100
     precision mediump float;
     
     varying vec2 v_pos;
@@ -183,7 +183,8 @@ static const char* fragment_shader_es2 = R"(
             }
         }
         
-        gl_FragColor = final_color;
+        // See gshader.cpp's fragment shader for why this swap is here.
+        gl_FragColor = final_color.bgra;
     }
 )";
 

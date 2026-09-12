@@ -80,6 +80,13 @@ gdiinclude_HEADERS += \
 	gdi/egl/platform/dreambox/dreambox_window_provider.h
 endif
 
+# gMainDC is a strict singleton (see gmaindc.cpp: ASSERT(m_instance == 0) in its
+# constructor). gEGLDC is itself a gMainDC, registered via its own AutoInit in
+# gdi/egl/egl_init.cpp, so when EGL is enabled it must be the ONLY gMainDC this
+# binary constructs - building gfbdc.cpp/sdl.cpp alongside it double-constructs
+# the singleton and aborts at startup.
+if HAVE_EGL
+else
 if HAVE_LIBSDL
 gdi_libenigma_gdi_a_SOURCES += \
 	gdi/sdl.cpp \
@@ -88,4 +95,5 @@ else
 gdi_libenigma_gdi_a_SOURCES += \
 	gdi/gfbdc.cpp \
 	gdi/gfbdc.h
+endif
 endif

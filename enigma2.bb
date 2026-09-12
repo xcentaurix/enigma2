@@ -37,6 +37,13 @@ EXTRACONFFUNCS += "e2_copy_aclocal"
 bindir = "/usr/bin"
 sbindir = "/usr/sbin"
 
+# e2egl (see the dm900/dm920 machine .conf MACHINE_FEATURES) enables the
+# custom EGL/GLES3 GPU-rendering gDC backend (lib/gdi/egl/) - pull in the
+# EGL/GLES headers and libs it links against, and pass --with-egl through to
+# configure.ac so it actually builds gEGLDC instead of silently falling back
+# to the software framebuffer backend.
+DEPENDS += "${@bb.utils.contains('MACHINE_FEATURES', 'e2egl', 'virtual/egl virtual/libgles2', '', d)}"
+
 EXTRA_OECONF = "\
 	--enable-maintainer-mode --with-target=native --with-libsdl=no --with-boxtype=${MACHINE} \
 	--enable-dependency-tracking \
@@ -45,6 +52,7 @@ EXTRA_OECONF = "\
 	${@bb.utils.contains("MACHINE_FEATURES", "textlcd", "--with-textlcd" , "", d)} \
 	${@bb.utils.contains("MACHINE_FEATURES", "colorlcd", "--with-colorlcd" , "", d)} \
 	${@bb.utils.contains("MACHINE_FEATURES", "gigabluelcd", "--with-gigabluelcd" , "", d)} \
+	${@bb.utils.contains("MACHINE_FEATURES", "e2egl", "--with-egl" , "", d)} \
 	BUILD_SYS=${BUILD_SYS} \
 	HOST_SYS=${HOST_SYS} \
 	STAGING_INCDIR=${STAGING_INCDIR} \

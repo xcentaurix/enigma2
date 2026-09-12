@@ -7,8 +7,7 @@
 // Two vertex attributes: pos_uv (location 0) and color (location 1)
 // ---------------------------------------------------------------------------
 #if defined(HAVE_GLES3)
-static const char *vertex_shader_es3 = R"(
-    #version 300 es
+static const char *vertex_shader_es3 = R"(#version 300 es
     layout(location = 0) in vec4 pos_uv;
     layout(location = 1) in vec4 color;
     
@@ -24,8 +23,7 @@ static const char *vertex_shader_es3 = R"(
     }
 )";
 
-static const char *fragment_shader_es3 = R"(
-    #version 300 es
+static const char *fragment_shader_es3 = R"(#version 300 es
     precision mediump float;
     
     in vec2 v_uv;
@@ -46,8 +44,7 @@ static const char *fragment_shader_es3 = R"(
 // Note: texture().r is replaced with texture2D().r; with GL_LUMINANCE the
 // luminance value is replicated into r, g and b, so .r still returns the mask.
 // ---------------------------------------------------------------------------
-static const char *vertex_shader_es2 = R"(
-    #version 100
+static const char *vertex_shader_es2 = R"(#version 100
     attribute vec4 pos_uv;
     attribute vec4 color;
     
@@ -63,8 +60,7 @@ static const char *vertex_shader_es2 = R"(
     }
 )";
 
-static const char *fragment_shader_es2 = R"(
-    #version 100
+static const char *fragment_shader_es2 = R"(#version 100
     precision mediump float;
     
     varying vec2 v_uv;

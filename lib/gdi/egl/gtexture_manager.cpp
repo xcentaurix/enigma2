@@ -1,5 +1,7 @@
 #include <lib/base/eerror.h>
+#include <lib/gdi/egl/gles_version.h>
 #include <lib/gdi/egl/gtexture_manager.h>
+#include <algorithm>
 
 static gTextureManager* s_active_manager = nullptr;
 
@@ -59,7 +61,7 @@ GLuint gTextureManager::createTextureFromDmabuf(gPixmap* pixmap) {
 	};
 
 	PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-	PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)glGetProcAddress("glEGLImageTargetTexture2DOES");
+	PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
 
 	if (!eglCreateImageKHR || !glEGLImageTargetTexture2DOES) {
 		eDebug("[gTextureManager] EGL dmabuf extensions not available");
@@ -111,13 +113,34 @@ GLuint gTextureManager::createTextureFromPixmap(gPixmap* pixmap) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	if (surface->bpp == 32) {
-		// 32-bit images can be uploaded directly.
-		// note: e2 often uses bgra layout in memory. if colors look swapped (blue faces),
-		// change GL_RGBA to GL_BGRA_EXT in the format parameter below.
-#ifndef GL_BGRA_EXT
-#define GL_BGRA_EXT 0x80E1
-#endif
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, surface->data);
+		// This render target's fragment-shader output ends up read back by
+		// the display in the opposite R/B order from what GL writes (see
+		// gshader.cpp's fragment shader for the ground-truth test that
+		// proved this). A GL_TEXTURE_SWIZZLE here would have been the
+		// spec-correct way to compensate for a *sampler* quirk, but this
+		// isn't one - it's a *render-target-vs-scanout* mismatch, unrelated
+		// to how a texture is sampled. Adding a swizzle on top of data
+		// that's already the right bytes to compensate for the mismatch
+		// (see below) just swaps it back to wrong, which is exactly what a
+		// swizzle here did until this was untangled with a controlled
+		// synthetic-texture test.
+		//
+		// e2's 32bpp surfaces are natively BGRA in memory (see gpixmap.h's
+		// gRGB struct: {b,g,r,a} on little-endian). Uploading that memory
+		// as-is while *telling* glTexImage2D it's GL_RGBA means the sampler
+		// reads back (r=trueB, g=trueG, b=trueR) - i.e. already pre-swapped
+		// - which is exactly what's needed to cancel out the render target's
+		// own R/B swap on the way to the screen. No CPU-side byte swapping,
+		// and no texture swizzle, needed.
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, surface->data);
+		{
+			static int s_teximage_diag_count = 0;
+			if (s_teximage_diag_count < 30) {
+				s_teximage_diag_count++;
+				GLenum err = glGetError();
+				eDebug("[gTextureManager] DIAG glTexImage2D(%dx%d) glGetError=0x%x", width, height, err);
+			}
+		}
 	} else if (surface->bpp == 8 && surface->clut.data) {
 		// 8-bit paletted image (often used for picons/skins).
 		// gles 3.0 does not support indexed color textures natively anymore,
@@ -125,14 +148,39 @@ GLuint gTextureManager::createTextureFromPixmap(gPixmap* pixmap) {
 		std::vector<uint32_t> rgba_buffer(width * height);
 		uint8_t* src_pixels = (uint8_t*)surface->data;
 		gRGB* palette = surface->clut.data;
+		int src_stride = surface->stride; // bytes per row in the *source* -
+		// may differ from width for externally-loaded images (e.g. a PNG
+		// decoder's own row alignment), unlike gPixmap's own allocations
+		// (stride == width for those). Indexing with a flat i = y*width+x
+		// instead of respecting stride is exactly what produces a sheared/
+		// distorted image once stride != width.
 
-		for (int i = 0; i < width * height; ++i) {
-			gRGB color = palette[src_pixels[i]];
-			// pack e2 gRGB into a 32-bit integer (rgba layout)
-			rgba_buffer[i] = (color.a << 24) | (color.b << 16) | (color.g << 8) | color.r;
+		for (int y = 0; y < height; ++y) {
+			const uint8_t* row = src_pixels + (size_t)y * src_stride;
+			for (int x = 0; x < width; ++x) {
+				// gRGB::argb() returns the native {b,g,r,a} memory order
+				// (see gpixmap.h) with alpha still in enigma2's inverted
+				// "0=opaque" convention - XOR the top byte to fix alpha.
+				// No R/B swap here (see the bpp==32 branch above): argb()'s
+				// native BGRA memory order, uploaded while telling
+				// glTexImage2D it's GL_RGBA, already comes out pre-swapped
+				// in exactly the way needed to cancel this render target's
+				// own R/B swap on the way to the screen.
+				rgba_buffer[y * width + x] = palette[row[x]].argb() ^ 0xFF000000;
+			}
 		}
 
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba_buffer.data());
+	} else if (surface->bpp == 8) {
+		// Plain 8-bit grayscale surface with no palette - this is what the
+		// font glyph atlas (gFontAtlas) is: a single-channel coverage/alpha
+		// map, not an indexed-color image. Previously this fell into the
+		// "unsupported" branch below, leaving flushTextBatch() uploading
+		// glyph data into a texture object that was never actually created
+		// (id 0) - glyphs rendered as garbage/invisible as a result.
+		GLenum internal_fmt = gles::isGLES3() ? GL_R8 : GL_LUMINANCE;
+		GLenum src_fmt = gles::isGLES3() ? GL_RED : GL_LUMINANCE;
+		glTexImage2D(GL_TEXTURE_2D, 0, internal_fmt, width, height, 0, src_fmt, GL_UNSIGNED_BYTE, surface->data);
 	} else {
 		eDebug("[gTextureManager] unsupported surface format (bpp: %d)", surface->bpp);
 		glDeleteTextures(1, &texture_id);

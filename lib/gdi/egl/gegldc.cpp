@@ -1,12 +1,18 @@
+#include <algorithm>
+#include <cstring>
 #include <lib/base/eerror.h>
 #include <lib/base/init.h>
 #include <lib/base/init_num.h>
 #include <lib/gdi/egl/gegldc.h>
 #include <lib/gdi/egl/gles_version.h>
 #include <lib/gdi/fb.h>
+#include <lib/gdi/font.h>
 
 #ifndef EGL_OPENGL_ES3_BIT_KHR
 #define EGL_OPENGL_ES3_BIT_KHR 0x00000040
+#endif
+#ifndef GL_BGRA_EXT
+#define GL_BGRA_EXT 0x80E1
 #endif
 
 // Initialization is now managed by gEGLDCAutoInit in egl_init.cpp
@@ -229,9 +235,74 @@ void gEGLDC::executeClear(const gOpcode* op) {
 	float b = m_background_color_rgb.b / 255.0f;
 	float a = 1.0f - (m_background_color_rgb.a / 255.0f);
 
+	static int s_diag_count = 0;
+	if (s_diag_count < 20) {
+		s_diag_count++;
+		eDebug("[gEGLDC] DIAG executeClear rects=%u rgba=(%.2f,%.2f,%.2f,%.2f)",
+			(unsigned)m_current_clip.rects.size(), r, g, b, a);
+		for (unsigned int i = 0; i < m_current_clip.rects.size() && i < 3; ++i) {
+			eRect dr = m_current_clip.rects[i];
+			eDebug("[gEGLDC] DIAG   rect[%u]=(%d,%d,%d,%d)", i, dr.x(), dr.y(), dr.width(), dr.height());
+		}
+	}
+
 	for (unsigned int i = 0; i < m_current_clip.rects.size(); ++i) {
 		eRect area = m_current_clip.rects[i];
 		m_basic_shader.drawRect(area.x(), area.y(), area.width(), area.height(), r, g, b, a);
+
+		// TEMPORARY: for an opaque, non-trivial-sized rect, immediately read
+		// back a pixel from *inside the exact rect we just drew* (not a fixed
+		// sample point elsewhere on screen) to check whether the draw call
+		// itself is landing anywhere at all, independent of any later
+		// present/copy timing.
+		if (s_diag_count <= 20 && a > 0.99f && area.width() > 4 && area.height() > 4) {
+			glFinish();
+			unsigned char px[4] = {0, 0, 0, 0};
+			glReadPixels(area.x() + area.width() / 2, m_height - (area.y() + area.height() / 2), 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+			eDebug("[gEGLDC] DIAG immediate readback at (%d,%d) [rect (%d,%d,%d,%d)] = %02x%02x%02x%02x (expected ~%02x%02x%02x%02x)",
+				area.x() + area.width() / 2, area.y() + area.height() / 2,
+				area.x(), area.y(), area.width(), area.height(),
+				px[0], px[1], px[2], px[3],
+				(unsigned)(r * 255), (unsigned)(g * 255), (unsigned)(b * 255), (unsigned)(a * 255));
+		}
+
+		// A widget that hides/repaints submits a gOpcode::clear for its own
+		// area, but NOT necessarily a new gOpcode::renderText if it no longer
+		// has any text to draw there. Since text is composited from a
+		// completely separate overlay (m_pixmap's texture, see
+		// gOpcode::renderText below) rather than drawn into this same GPU
+		// target, clearing the background alone does not erase any
+		// previously-composited text sitting at this location - it would
+		// just stay visible forever (e.g. an infobar that "doesn't
+		// disappear"). Erase the corresponding region of m_pixmap's CPU
+		// buffer too and re-composite it (now transparent) so stale text
+		// actually goes away.
+		if (m_pixmap->surface->gl_texture_id != 0) {
+			int pw = m_pixmap->size().width();
+			int ph = m_pixmap->size().height();
+			int left = std::max(0, area.left());
+			int top = std::max(0, area.top());
+			int right = std::min(pw, area.left() + area.width());
+			int bottom = std::min(ph, area.top() + area.height());
+			if (right > left && bottom > top) {
+				uint8_t* base = (uint8_t*)m_pixmap->surface->data;
+				int stride = pw * 4;
+				for (int y = top; y < bottom; ++y)
+					memset(base + (size_t)y * stride + (size_t)left * 4, 0, (size_t)(right - left) * 4);
+
+				glBindTexture(GL_TEXTURE_2D, m_pixmap->surface->gl_texture_id);
+				glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+				glTexSubImage2D(GL_TEXTURE_2D, 0, 0, top, pw, bottom - top, GL_RGBA, GL_UNSIGNED_BYTE, base + (size_t)top * stride);
+
+				glEnable(GL_BLEND);
+				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+				glEnable(GL_SCISSOR_TEST);
+				setGlScissor(eRect(left, top, right - left, bottom - top));
+				m_texture_shader.drawTexture(0, 0, (float)m_width, (float)m_height, m_pixmap->surface->gl_texture_id);
+				glDisable(GL_SCISSOR_TEST);
+				glDisable(GL_BLEND);
+			}
+		}
 	}
 }
 
@@ -307,15 +378,32 @@ void gEGLDC::renderGlyph(const ePoint& pos, gPixmap* glyph_mask, const gRGB& col
 	glyph_uv uv;
 	glyph_key_t key = reinterpret_cast<glyph_key_t>(glyph_mask->surface->data);
 
-	if (!m_font_atlas.getGlyph(key, uv)) {
+	static int s_diag_count = 0;
+	bool do_diag = s_diag_count < 40;
+	bool was_cached = m_font_atlas.getGlyph(key, uv);
+
+	if (!was_cached) {
 		// Flush the current batch before uploading a new glyph to the atlas.
 		flushTextBatch();
 
 		int w = glyph_mask->size().width();
 		int h = glyph_mask->size().height();
 		uint8_t* data = (uint8_t*)glyph_mask->surface->data;
+
+		if (do_diag) {
+			int nonzero = 0;
+			for (int i = 0; i < w * h; ++i)
+				if (data[i]) nonzero++;
+			eDebug("[gEGLDC] DIAG renderGlyph MISS key=%p w=%d h=%d nonzero_bytes=%d/%d pos=(%d,%d)",
+				(void*)key, w, h, nonzero, w * h, pos.x(), pos.y());
+		}
+
 		m_font_atlas.addGlyph(key, w, h, data, uv);
+	} else if (do_diag) {
+		eDebug("[gEGLDC] DIAG renderGlyph HIT  key=%p uv=(%.4f,%.4f,%.4f,%.4f) wh=(%u,%u) pos=(%d,%d)",
+			(void*)key, uv.u0, uv.v0, uv.u1, uv.v1, uv.width, uv.height, pos.x(), pos.y());
 	}
+	if (do_diag) s_diag_count++;
 
 	float r = color.r / 255.0f;
 	float g = color.g / 255.0f;
@@ -378,6 +466,13 @@ void gEGLDC::flushTextBatch() {
 		m_font_atlas.clearDirty();
 	}
 
+	// Bind the text shader's own VBO + vertex attribute layout (pos_uv +
+	// color) before touching GL_ARRAY_BUFFER - without this, whatever another
+	// shader (e.g. gShader's 2-float-per-vertex layout from an earlier
+	// executeFill/executeRectangle in this same frame) last bound is still
+	// active, and this batch's data gets completely misinterpreted.
+	m_text_shader.bindVAO();
+
 	glBufferSubData(GL_ARRAY_BUFFER, 0, m_text_batch_buffer.size() * sizeof(float), m_text_batch_buffer.data());
 
 	int vertex_count = m_text_batch_buffer.size() / 8; // 8 floats per vertex
@@ -389,9 +484,76 @@ void gEGLDC::flushTextBatch() {
 	}
 	glDisable(GL_SCISSOR_TEST);
 
+	m_text_shader.unbindVAO();
+
 	glDisable(GL_BLEND);
 
 	m_text_batch_buffer.clear();
+}
+
+void gEGLDC::compositeTextOverlay(eRect area) {
+	static int s_diag_count = 0;
+	bool do_diag = s_diag_count < 2000;
+	if (do_diag) s_diag_count++;
+
+	// Clamp to the pixmap's actual bounds - a scrolling list widget's
+	// per-row offset can legitimately place a row partially or fully
+	// outside (e.g. mid-scroll, or a row whose valign correction pushes it
+	// off the bottom).
+	int pw = m_pixmap->size().width();
+	int ph = m_pixmap->size().height();
+	int left = std::max(0, area.left());
+	int top = std::max(0, area.top());
+	int right = std::min(pw, area.left() + area.width());
+	int bottom = std::min(ph, area.top() + area.height());
+	if (right <= left || bottom <= top) {
+		if (do_diag)
+			eDebug("[gEGLDC] DIAG compositeTextOverlay SKIPPED (degenerate clamp) area=(%d,%d,%d,%d) pw=%d ph=%d",
+				area.x(), area.y(), area.width(), area.height(), pw, ph);
+		return;
+	}
+	area = eRect(left, top, right - left, bottom - top);
+
+	// Incremental glTexSubImage2D update instead of deleting and recreating
+	// a full 1920x1080 texture on every single text/para draw (which was
+	// both very slow and, before the use-after-free above was fixed, the
+	// apparent source of visible corruption of unrelated content).
+	GLuint tex_id = m_pixmap->surface->gl_texture_id;
+	if (tex_id == 0) {
+		tex_id = m_texture_manager.getTexture(m_pixmap);
+	} else {
+		glBindTexture(GL_TEXTURE_2D, tex_id);
+		int row_width = m_pixmap->size().width();
+		const uint8_t* src = (const uint8_t*)m_pixmap->surface->data;
+		src += (size_t)area.top() * row_width * 4;
+		// No CPU-side R/B swap here (see gtexture_manager.cpp's bpp==32
+		// branch for the full explanation): m_pixmap is natively BGRA in
+		// memory, and uploading that as-is while telling GL it's GL_RGBA
+		// already produces exactly the pre-swapped bytes needed to cancel
+		// this render target's own R/B swap on the way to the screen.
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, area.top(), row_width, area.height(), GL_RGBA, GL_UNSIGNED_BYTE, src);
+		if (do_diag) {
+			GLenum err = glGetError();
+			eDebug("[gEGLDC] DIAG compositeTextOverlay subimage glGetError=0x%x tex_id=%u yoff=%d rows=%d", err, tex_id, area.top(), area.height());
+		}
+	}
+	if (do_diag)
+		eDebug("[gEGLDC] DIAG compositeTextOverlay tex_id=%u area=(%d,%d,%d,%d)", tex_id, area.x(), area.y(), area.width(), area.height());
+	if (tex_id) {
+		// m_pixmap is only valid within the text's own bounding area - the
+		// rest of that 1920x1080 CPU buffer is stale/uninitialized content
+		// from whenever it was last (re)allocated. Scissor the fragment
+		// writes down to just the area this opcode actually populated so
+		// nothing outside it can be touched.
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glEnable(GL_SCISSOR_TEST);
+		setGlScissor(area);
+		m_texture_shader.drawTexture(0, 0, (float)m_width, (float)m_height, tex_id);
+		glDisable(GL_SCISSOR_TEST);
+		glDisable(GL_BLEND);
+	}
 }
 
 void gEGLDC::exec(const gOpcode* opcode) {
@@ -421,14 +583,78 @@ void gEGLDC::exec(const gOpcode* opcode) {
 			executeBlit(opcode);
 			break;
 
+		case gOpcode::renderText: {
+			// eTextPara::blit() (lib/gdi/font.cpp) draws glyphs via pure
+			// software rasterization directly into dc.getPixmap()'s CPU
+			// buffer (gDC::m_pixmap) - it has no virtual GPU hook in this
+			// codebase. compositeTextOverlay() uploads the result and
+			// composites it onto the real GPU surface, the same way any
+			// other pixmap (icons etc.) is drawn via executeBlit().
+			//
+			// CRITICAL: capture area BEFORE calling gDC::exec(opcode) - its
+			// renderText handling (grc.cpp) does "delete o->parm.renderText;"
+			// as its very last step. Reading opcode->parm.renderText->area
+			// afterward is a use-after-free.
+			eRect area = opcode->parm.renderText->area;
+			gDC::exec(opcode);
+			area.moveBy(m_current_offset);
+			compositeTextOverlay(area);
+			break;
+		}
+
+		case gOpcode::renderPara: {
+			// eListboxPythonMultiContent (templated lists - channel/EPG
+			// lists etc.) uses gPainter::renderPara() for some entries
+			// instead of renderText(), a completely separate opcode that
+			// this switch never handled - text rendered through it was
+			// correctly software-blitted into m_pixmap but never composited
+			// to the GPU surface at all (fell into the default: case),
+			// exactly matching "list text missing in templated lists".
+			//
+			// CRITICAL (same reasoning as renderText above): grc.cpp's
+			// renderPara handling calls "textpara->Release()" then
+			// "delete o->parm.renderPara" as its last steps, so the area
+			// must be captured before gDC::exec(opcode) runs.
+			eTextPara* textpara = opcode->parm.renderPara->textpara;
+			eRect area = textpara->getArea();
+			area.moveBy(opcode->parm.renderPara->offset);
+			gDC::exec(opcode);
+			area.moveBy(m_current_offset);
+			compositeTextOverlay(area);
+			break;
+		}
+
 		case gOpcode::clear:
 			executeClear(opcode);
 			gDC::exec(opcode);
 			break;
 
 		case gOpcode::flush:
+			// This, not gOpcode::flip, is the real "end of frame" signal for
+			// this system: eWidgetDesktop runs in cmImmediate composition
+			// mode (see eWidgetDesktop::paint()'s cmImmediate branch, and
+			// note cmBuffered's own redrawComposition() call is literally
+			// commented out) - cmImmediate's paint() calls gPainter::flush()
+			// (-> gOpcode::flush), never gPainter::flip(). The comment that
+			// used to be on the flip case below ("gPainter::flip() already
+			// submits this opcode at the end of every frame") was simply
+			// wrong for this composition mode: flip() was being called from
+			// an opcode that never fires during normal UI navigation, so our
+			// present/resolve step (-> presentPixmap()/eglSwapBuffers()) was
+			// never actually running on a real frame boundary at all -
+			// confirmed by a ground-truth debug draw hooked into flip() that
+			// never once fired despite extensive navigation. Content still
+			// rendered because the GPU/driver eventually flushes its tile
+			// buffer on its own with no explicit sync point, which likely
+			// also explains earlier slowness/latency symptoms.
+			flushTextBatch();
+			flip();
+			gDC::exec(opcode);
+			break;
+
 		case gOpcode::flip:
 			flushTextBatch();
+			flip();
 			gDC::exec(opcode);
 			break;
 
@@ -437,9 +663,23 @@ void gEGLDC::exec(const gOpcode* opcode) {
 			flushTextBatch();
 			break;
 	}
+
+	// Removed: presenting (glFinish()/resolve) after every single opcode
+	// instead of once per real frame boundary is architecturally wrong for a
+	// tile-based deferred GPU (V3D) - it forces a premature resolve mid-frame
+	// for every tiny draw call, which is both very slow (matches the "list
+	// builds up slowly" symptom) and a plausible cause of the partial/
+	// corrupted content seen across multiple unrelated elements (z-order-like
+	// symptoms, missing scrollbar/icon content) once real work started
+	// happening on the correct thread. gOpcode::flip (handled above, and
+	// submitted by gPainter::flip() at the end of every real frame) is the
+	// correct, single place this should happen.
 }
 
+gEGLDC* gEGLDC::s_instance = nullptr;
+
 gEGLDC::gEGLDC(INativeWindowProvider* window_provider, int width, int height) : gMainDC() {
+	s_instance = this;
 	int xres = width, yres = height, bpp = 32;
 
 	if (!window_provider) {
@@ -461,11 +701,21 @@ gEGLDC::gEGLDC(INativeWindowProvider* window_provider, int width, int height) : 
 	m_egl_surface = EGL_NO_SURFACE;
 	m_egl_context = EGL_NO_CONTEXT;
 
-	m_pixmap = new gPixmap(eSize(width, height), 32);
+	// accelNever: this pixmap is a plain CPU-side staging buffer for text
+	// compositing (see gOpcode::renderText handling below) that we
+	// repeatedly glTexSubImage2D() into - it must never get a physical/ION
+	// accelerated buffer, or createTextureFromPixmap() takes the DMA-BUF
+	// import path (DRM_FORMAT_ARGB8888) on first use instead of a plain
+	// glTexImage2D (GL_BGRA_EXT) texture, and our later glTexSubImage2D
+	// calls (which assume the latter) operate on the wrong kind of texture
+	// object entirely - a very likely source of the wrong colors seen.
+	m_pixmap = new gPixmap(eSize(width, height), 32, gPixmap::accelNever);
 }
 
 gEGLDC::~gEGLDC() {
 	cleanupEGL();
+	if (s_instance == this)
+		s_instance = nullptr;
 }
 
 void gEGLDC::cleanupEGL() {
@@ -492,7 +742,8 @@ void gEGLDC::setResolution(int xres, int yres, int bpp) {
 
 	m_width = xres;
 	m_height = yres;
-	m_pixmap = new gPixmap(eSize(xres, yres), bpp);
+	// See the constructor for why accelNever is required here.
+	m_pixmap = new gPixmap(eSize(xres, yres), bpp, gPixmap::accelNever);
 
 	if (isInitialized()) {
 		m_basic_shader.setResolution((float)m_width, (float)m_height);

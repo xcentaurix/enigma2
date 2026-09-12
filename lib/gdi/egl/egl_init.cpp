@@ -18,6 +18,17 @@ class gEGLDCAutoInit : protected eAutoInit
 	gEGLDC *m_dc;
 	void initNow() override
 	{
+		// eInit::resumeInit() (called from StartEnigma.py around every plugin
+		// scan, via enigma.pauseInit()/enigma.resumeInit()) unconditionally
+		// re-invokes initNow() on every already-registered AutoInit, not just
+		// new ones (see eInit::resumeInit() in lib/base/init.cpp) - every other
+		// AutoInit in this codebase guards against that (see eAutoInitP0's
+		// "if (t == nullptr)" in lib/base/init.h); without this guard we would
+		// construct a second gEGLDC, and gMainDC's ASSERT(m_instance == 0)
+		// would abort the process.
+		if (m_dc)
+			return;
+
 		if (egl_config::disable_egl)
 		{
 			eDebug("[gEGLDC] EGL disabled via command line");
@@ -50,13 +61,17 @@ class gEGLDCAutoInit : protected eAutoInit
 			}
 
 			eDebug("[eInit] + (%d) gEGLDC", rl);
+			// Do NOT call initEGL() here: it does eglMakeCurrent(), and EGL
+			// contexts are bound per-thread. This runs on the eInit/main
+			// thread, but every actual render opcode executes on gRC's own
+			// worker thread (gRC::thread(), priority (10) - after this one -
+			// see grc.cpp), so that thread would have no current context and
+			// every GL call would silently no-op (matches what was observed:
+			// no GL errors, glGetIntegerv(GL_VIEWPORT) reading back all
+			// zeroes, nothing ever rendering). gRC::thread() calls
+			// gEGLDC::getInstance()->initEGL() itself at startup instead,
+			// mirroring the existing USE_LIBVUGLES2 pattern in that function.
 			m_dc = new gEGLDC(provider, xres, yres);
-			if (!m_dc->initEGL())
-			{
-				eDebug("[gEGLDC] initEGL failed, falling back...");
-				delete m_dc;
-				m_dc = nullptr;
-			}
 		}
 	}
 
