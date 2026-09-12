@@ -15,6 +15,7 @@ gdi_libenigma_gdi_a_SOURCES = \
 	gdi/font.cpp \
 	gdi/font_arabic.cpp \
 	gdi/gfont.cpp \
+	gdi/gfont_atlas.cpp \
 	gdi/glcddc.cpp \
 	gdi/gmaindc.cpp \
 	gdi/gpixmap.cpp \
@@ -39,6 +40,7 @@ gdiinclude_HEADERS = \
 	gdi/fblcd.h \
 	gdi/font.h \
 	gdi/gfont.h \
+	gdi/gfont_atlas.h \
 	gdi/glcddc.h \
 	gdi/gpixmap.h \
 	gdi/grc.h \
@@ -47,6 +49,36 @@ gdiinclude_HEADERS = \
 	gdi/picload.h \
 	gdi/pixmapcache.h \
 	gdi/region.h
+
+if HAVE_EGL
+gdi_libenigma_gdi_a_SOURCES += \
+	gdi/egl/egl_config.cpp \
+	gdi/egl/egl_init.cpp \
+	gdi/egl/gegldc.cpp \
+	gdi/egl/gles_version.cpp \
+	gdi/egl/gtexture_manager.cpp \
+	gdi/egl/shader/gadvanced_shader.cpp \
+	gdi/egl/shader/gshader.cpp \
+	gdi/egl/shader/gtext_shader.cpp \
+	gdi/egl/shader/gtexture_shader.cpp
+gdiinclude_HEADERS += \
+	gdi/egl/egl_config.h \
+	gdi/egl/gegldc.h \
+	gdi/egl/gles_version.h \
+	gdi/egl/gtexture_manager.h \
+	gdi/egl/inative_window_provider.h \
+	gdi/egl/shader/gadvanced_shader.h \
+	gdi/egl/shader/gshader.h \
+	gdi/egl/shader/gtext_shader.h \
+	gdi/egl/shader/gtexture_shader.h
+endif
+
+if HAVE_DREAMBOX_EGL
+gdi_libenigma_gdi_a_SOURCES += \
+	gdi/egl/platform/dreambox/dreambox_window_provider.cpp
+gdiinclude_HEADERS += \
+	gdi/egl/platform/dreambox/dreambox_window_provider.h
+endif
 
 if HAVE_LIBSDL
 gdi_libenigma_gdi_a_SOURCES += \
