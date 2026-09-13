@@ -42,6 +42,13 @@ private:
 	std::vector<float> m_text_batch_buffer;
 	const size_t MAX_BATCH_GLYPHS = 1024;
 
+	// Accumulated across every renderText/renderPara/clear opcode in the
+	// current frame instead of uploading+compositing m_pixmap's text overlay
+	// once per opcode (see presentTextOverlay()) - the union of every area
+	// that touched m_pixmap's CPU buffer since the last present.
+	eRect m_dirty_overlay_rect;
+	bool m_overlay_dirty = false;
+
 	bool tryInitEGL(int version);
 	void cleanupEGL();
 
@@ -63,6 +70,13 @@ private:
 	// GPU hook of its own, so without this nothing drawn into it ever
 	// reaches the display.
 	void compositeTextOverlay(eRect area);
+
+	// Uploads m_pixmap's dirty region (m_dirty_overlay_rect, accumulated by
+	// compositeTextOverlay() and executeClear()'s stale-text erase) and
+	// composites it onto the GPU surface exactly once per frame, right
+	// before flip() - see the comment above compositeTextOverlay() in
+	// gegldc.cpp for why deferring this to end-of-frame is safe.
+	void presentTextOverlay();
 
 	bool isHardwareAccelerated() const { return true; }
 	void renderGlyph(const ePoint& pos, gPixmap* glyph_mask, const gRGB& color);
