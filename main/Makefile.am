@@ -7,7 +7,7 @@ AM_CPPFLAGS = \
 AM_CXXFLAGS = \
 	$(LIBSDL_CFLAGS)
 
-bin_PROGRAMS = enigma2
+bin_PROGRAMS = enigma2 e3-compd
 
 enigma2_SOURCES = \
 	bsod.cpp \
@@ -25,12 +25,55 @@ enigma2_LDADD_WHOLE = \
 	$(top_builddir)/lib/mmi/libenigma_mmi.a \
 	$(top_builddir)/lib/dvb/libenigma_dvb.a \
 	$(top_builddir)/lib/dvb_ci/libenigma_dvb_ci.a \
+	$(top_builddir)/lib/gdi/libenigma_gdi_ipc.a \
 	$(top_builddir)/lib/gdi/libenigma_gdi.a \
 	$(top_builddir)/lib/gui/libenigma_gui.a \
 	$(top_builddir)/lib/python/libenigma_python.a \
 	$(top_builddir)/lib/nav/libenigma_nav.a \
 	$(top_builddir)/lib/network/libenigma_network.a \
 	$(top_builddir)/lib/service/libenigma_service.a
+
+# Compositor-process binary for the Enigma3 compositor-split (see the
+# plan's "Milestone 1" design). Always links the shared-memory opcode
+# transport (libenigma_gdi_ipc.a: pthread + POSIX shm). When this build has
+# HAVE_EGL and HAVE_DREAMBOX_EGL (the same flags gate gEGLDC/
+# DreamboxWindowProvider elsewhere, see lib/gdi/Makefile.inc), e3-compd.cpp
+# also drives a real gEGLDC, which means whole-archive-linking the same
+# libenigma_gdi.a enigma2 itself links - and, since that pulls in
+# unrelated-to-e3-compd code too (epng.cpp/picload.cpp's image decoders,
+# in particular), the external libs those need as well. A build without
+# those flags only needs libenigma_gdi_ipc.a; the extra libs below are
+# harmless (unused symbols, not linked in) in that case since automake
+# doesn't fail on an -l flag for a library nothing from this binary
+# actually references.
+e3_compd_SOURCES = \
+	e3-compd.cpp
+
+e3_compd_LDADD_WHOLE = \
+	$(top_builddir)/lib/gdi/libenigma_gdi_ipc.a \
+	$(top_builddir)/lib/gdi/libenigma_gdi.a
+
+e3_compd_LDADD = \
+	@BASE_LIBS@ \
+	@LIBGIF_LIBS@ \
+	@LIBJPEG_LIBS@ \
+	@PTHREAD_LIBS@ \
+	@EGL_LIBS@ \
+	@GLES2_LIBS@ \
+	-lrt
+
+# @BASE_LIBS@ is copied from enigma2_LDADD below on the assumption it
+# carries generic deps (freetype et al) that libenigma_gdi.a's non-EGL
+# sources (font.cpp in particular) need too, since no dedicated
+# FREETYPE_LIBS-style variable is used anywhere in this file either -
+# unverified, since this couldn't be build-tested here; if e3-compd fails
+# to link with undefined references once you do build it, check what
+# @BASE_LIBS@ actually expands to before adding anything else.
+
+e3-compd$(EXEEXT): $(e3_compd_OBJECTS) $(e3_compd_DEPENDENCIES) $(e3_compd_LDADD_WHOLE)
+	$(AM_V_CXXLD)$(CXXLD) $(AM_CXXFLAGS) $(CXXFLAGS) $(AM_LDFLAGS) $(LDFLAGS) -o $@ \
+		$(e3_compd_OBJECTS) \
+		-Wl,--whole-archive $(e3_compd_LDADD_WHOLE) -Wl,--no-whole-archive $(e3_compd_LDADD) $(LIBS)
 
 enigma2_LDADD = \
 	@BASE_LIBS@ \

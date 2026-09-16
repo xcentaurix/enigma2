@@ -26,6 +26,14 @@
 #include <lib/gdi/gfont.h>
 #include <lib/gdi/compositing.h>
 
+#ifdef HAVE_E3_COMPD_CLIENT
+// Not defined by any build file yet - see grc.h's comment at
+// connectToCompositor() below. Kept behind this guard so gRC's header
+// footprint (and every TU that includes it) is completely unaffected for
+// every existing build configuration.
+#include <lib/gdi/ipc/gshmopcodeclient.h>
+#endif
+
 class eTextPara;
 
 class gDC;
@@ -256,11 +264,43 @@ class gRC : public iObject, public sigc::trackable
 
 	int m_prev_idle_count;
 
+#ifdef HAVE_E3_COMPD_CLIENT
+	// Non-null once connectToCompositor() has succeeded: submit() then
+	// forwards every opcode to the compositor process instead of this
+	// process's own local queue/render thread - see submit()'s
+	// implementation (grc.cpp) and the Enigma3 compositor-split plan.
+	// Left as a bare owning pointer (not ePtr, not part of gRC's own
+	// refcounting) since it's this gRC instance's exclusive property with
+	// a lifetime tied 1:1 to it, constructed/destroyed only from
+	// connectToCompositor()/the destructor.
+	e3ipc::gShmOpcodeClient *m_compClient = nullptr;
+#endif
+
 public:
 	gRC();
 	virtual ~gRC();
 
 	void submit(const gOpcode &o);
+
+#ifdef HAVE_E3_COMPD_CLIENT
+	// Switches this gRC into forwarding mode: from this call on, submit()
+	// sends every opcode to the compositor process (identified by
+	// `shmName`, e.g. "/e3-compd-opcodes") tagged as `dc`, instead of
+	// queueing it for this process's own local render thread. Must be
+	// called before the first submit() that should be forwarded - there
+	// is no support yet for switching a gRC that's already rendering
+	// in-process over to remote mode, or back. Guarded behind
+	// HAVE_E3_COMPD_CLIENT (not defined by any build file yet, see the
+	// include guard above) so no existing build is affected by this
+	// method's mere existence, let alone by calling it - nothing in this
+	// codebase calls it yet either; wiring main/enigma.cpp's startup to
+	// call it is separately-scoped follow-up work (see the Enigma3
+	// compositor-split plan).
+	//
+	// Returns false if the compositor process hasn't created `shmName`
+	// yet (or isn't running) - see gShmOpcodeClient::connect().
+	bool connectToCompositor(const char *shmName, e3ipc::WireDcId dc);
+#endif
 
 #ifdef CONFIG_ION
 	void lock();

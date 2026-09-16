@@ -1,3 +1,15 @@
+# Split out from libenigma_gdi.a below: just the shared-memory opcode
+# transport (gwireopcode/gshmopcodering), with no dependency beyond pthread
+# and POSIX shm. e3-compd (main/Makefile.am) links this alone rather than
+# the whole of libenigma_gdi.a, so it doesn't also pull in EGL/FreeType/
+# libjpeg/etc - those only matter once e3-compd grows a real gEGLDC/gLCDDC
+# backend (see the Enigma3 compositor-split plan's next step). enigma2
+# itself links both this and libenigma_gdi.a, via the same whole-archive
+# LDADD_WHOLE mechanism it already uses for every other lib/*/lib*.a.
+noinst_LIBRARIES += gdi/libenigma_gdi_ipc.a
+gdi_libenigma_gdi_ipc_a_SOURCES = \
+	gdi/ipc/gshmopcodering.cpp
+
 noinst_LIBRARIES += gdi/libenigma_gdi.a
 
 gdi_libenigma_gdi_a_CXXFLAGS = $(LIBSDL_CFLAGS)
@@ -19,6 +31,9 @@ gdi_libenigma_gdi_a_SOURCES = \
 	gdi/gmaindc.cpp \
 	gdi/gpixmap.cpp \
 	gdi/grc.cpp \
+	gdi/ipc/gcompositorproxydc.cpp \
+	gdi/ipc/gopcodeserialize.cpp \
+	gdi/ipc/gshmopcodeclient.cpp \
 	gdi/lcd.cpp \
 	gdi/picexif.cpp \
 	gdi/picload.cpp \
@@ -42,6 +57,11 @@ gdiinclude_HEADERS = \
 	gdi/glcddc.h \
 	gdi/gpixmap.h \
 	gdi/grc.h \
+	gdi/ipc/gcompositorproxydc.h \
+	gdi/ipc/gopcodeserialize.h \
+	gdi/ipc/gshmopcodeclient.h \
+	gdi/ipc/gshmopcodering.h \
+	gdi/ipc/gwireopcode.h \
 	gdi/lcd.h \
 	gdi/picexif.h \
 	gdi/picload.h \

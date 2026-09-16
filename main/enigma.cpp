@@ -276,6 +276,18 @@ int main(int argc, char **argv)
 	ePtr<gLCDDC> my_lcd_dc;
 	gLCDDC::getInstance(my_lcd_dc);
 
+#ifdef HAVE_E3_COMPD_CLIENT
+	// Not defined by any build file yet - see lib/gdi/grc.h's
+	// connectToCompositor() and lib/gdi/ipc/gcompositorproxydc.h for what
+	// this guards. Connects gRC into forwarding mode before anything
+	// below submits a single opcode (dsk.paint()/dsk_lcd.paint(), at the
+	// very end of this function) - see the Enigma3 compositor-split plan.
+	// The shm name/WireDcId are hardcoded placeholders; a real deployment
+	// needs these configurable (and e3-compd actually running first -
+	// there's no spawn-if-missing or retry here yet either).
+	if (!gRC::getInstance()->connectToCompositor("/e3-compd-opcodes", e3ipc::WireDcId::MainDisplay))
+		eDebug("[MAIN] connectToCompositor() failed - is e3-compd running?");
+#endif
 
 	/* ok, this is currently hardcoded for arabic. */
 	/* some characters are wrong in the regular font, force them to use the replacement font */
@@ -316,48 +328,60 @@ int main(int argc, char **argv)
 	{
 		spinnerPostionX = spinnerPostionY = 25;
 	}
-	eDebug("[MAIN] Loading spinners...");
+	// needsSpinnerSetup() is false only for gCompositorProxyDC (lib/gdi/
+	// ipc/gcompositorproxydc.h, only ever built under HAVE_E3_COMPD_CLIENT
+	// - not defined by any build file yet): it has no local pixmap for
+	// setSpinner()'s CPU save/restore buffers to assert on, and the local
+	// busy-spinner doesn't obviously belong in the UI process anymore
+	// once real rendering happens in a separate compositor process - see
+	// that class's own comment. Every real backend (gEGLDC/gFBDC/gSDLDC)
+	// keeps returning true here, so this is a no-op for every build that
+	// exists today.
+	if (my_dc->needsSpinnerSetup())
 	{
-#define MAX_SPINNER 64
-		int i = 0;
-		std::string skinpath = "${datadir}/enigma2/" + active_skin;
-		std::string defpath = "${datadir}/enigma2/spinner";
-		bool def = (skinpath.compare(defpath) == 0);
-		ePtr<gPixmap> wait[MAX_SPINNER];
-		while(i < MAX_SPINNER)
+		eDebug("[MAIN] Loading spinners...");
 		{
-			char filename[64] = {};
-			std::string rfilename;
-			snprintf(filename, sizeof(filename), "%s/wait%d.png", skinpath.c_str(), i + 1);
-			rfilename = eEnv::resolve(filename);
-			loadPNG(wait[i], rfilename.c_str());
-
-			if (!wait[i])
+#define MAX_SPINNER 64
+			int i = 0;
+			std::string skinpath = "${datadir}/enigma2/" + active_skin;
+			std::string defpath = "${datadir}/enigma2/spinner";
+			bool def = (skinpath.compare(defpath) == 0);
+			ePtr<gPixmap> wait[MAX_SPINNER];
+			while(i < MAX_SPINNER)
 			{
-				// spinner failed
-				if (i==0)
-				{
-					// retry default spinner only once
-					if (!def)
-					{
-						def = true;
-						skinpath = defpath;
-						continue;
-					}
-				}
-				// exit loop because of no more spinners
-				break;
-			}
-			i++;
-		}
-		eDebug("[MAIN] Found %d spinners.", i);
-		if (i==0)
-			my_dc->setSpinner(eRect(spinnerPostionX, spinnerPostionY, 0, 0), wait, 1);
-		else
-			my_dc->setSpinner(eRect(ePoint(spinnerPostionX, spinnerPostionY), wait[0]->size()), wait, i);
-	}
+				char filename[64] = {};
+				std::string rfilename;
+				snprintf(filename, sizeof(filename), "%s/wait%d.png", skinpath.c_str(), i + 1);
+				rfilename = eEnv::resolve(filename);
+				loadPNG(wait[i], rfilename.c_str());
 
-	gRC::getInstance()->setSpinnerDC(my_dc);
+				if (!wait[i])
+				{
+					// spinner failed
+					if (i==0)
+					{
+						// retry default spinner only once
+						if (!def)
+						{
+							def = true;
+							skinpath = defpath;
+							continue;
+						}
+					}
+					// exit loop because of no more spinners
+					break;
+				}
+				i++;
+			}
+			eDebug("[MAIN] Found %d spinners.", i);
+			if (i==0)
+				my_dc->setSpinner(eRect(spinnerPostionX, spinnerPostionY, 0, 0), wait, 1);
+			else
+				my_dc->setSpinner(eRect(ePoint(spinnerPostionX, spinnerPostionY), wait[0]->size()), wait, i);
+		}
+
+		gRC::getInstance()->setSpinnerDC(my_dc);
+	}
 
 	eRCInput::getInstance()->keyEvent.connect(sigc::ptr_fun(&keyEvent));
 

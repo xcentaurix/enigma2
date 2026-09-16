@@ -20,6 +20,98 @@ void *gRC::thread_wrapper(void *ptr)
 }
 #endif
 
+#ifdef HAVE_E3_COMPD_CLIENT
+// Everything gDC::exec() (below) normally frees once it finishes
+// executing a given opcode - its per-case delete/Release() calls -
+// because forwarding an opcode to the compositor process instead means it
+// never reaches exec() in THIS process at all, so nothing else would ever
+// free the heap payload gPainter's submit-side methods allocated for it.
+// Deliberately mirrors exec()'s cleanup exactly rather than "fixing" the
+// couple of spots exec() itself never frees (sendShow/sendHide's
+// psetShowHideInfo, and setFlush/setView under USE_LIBVUGLES2, are
+// pre-existing leaks in the in-process path too - see each's absence
+// below, falling through to the default no-op) - this stays a faithful
+// analog of the real cleanup, not an improved one. Only called for
+// whatever submit()'s own switch below doesn't already handle inline
+// (shutdown/notify/setCompositing - see there).
+static void freeForwardedOpcodePayload(const gOpcode &o)
+{
+	switch (o.opcode)
+	{
+	case gOpcode::setBackgroundColor:
+	case gOpcode::setForegroundColor:
+		delete o.parm.setColor;
+		break;
+	case gOpcode::setBackgroundColorRGB:
+	case gOpcode::setForegroundColorRGB:
+		delete o.parm.setColorRGB;
+		break;
+	case gOpcode::setFont:
+		o.parm.setFont->font->Release();
+		delete o.parm.setFont;
+		break;
+	case gOpcode::setGradient:
+		delete o.parm.gradient;
+		break;
+	case gOpcode::setRadius:
+		delete o.parm.radius;
+		break;
+	case gOpcode::setBorder:
+		delete o.parm.border;
+		break;
+	case gOpcode::renderText:
+		if (o.parm.renderText->text)
+			free(o.parm.renderText->text);
+		delete o.parm.renderText;
+		break;
+	case gOpcode::renderPara:
+		o.parm.renderPara->textpara->Release();
+		delete o.parm.renderPara;
+		break;
+	case gOpcode::fill:
+	case gOpcode::clear:
+		delete o.parm.fill;
+		break;
+	case gOpcode::fillRegion:
+		delete o.parm.fillRegion;
+		break;
+	case gOpcode::blit:
+		o.parm.blit->pixmap->Release();
+		delete o.parm.blit;
+		break;
+	case gOpcode::rectangle:
+		delete o.parm.rectangle;
+		break;
+	case gOpcode::setPalette:
+		delete[] o.parm.setPalette->palette->data;
+		delete o.parm.setPalette->palette;
+		delete o.parm.setPalette;
+		break;
+	case gOpcode::mergePalette:
+		o.parm.mergePalette->target->Release();
+		delete o.parm.mergePalette;
+		break;
+	case gOpcode::line:
+		delete o.parm.line;
+		break;
+	case gOpcode::addClip:
+	case gOpcode::setClip:
+		delete o.parm.clip;
+		break;
+	case gOpcode::setOffset:
+		delete o.parm.setOffset;
+		break;
+	default:
+		// popClip and the parm-less opcodes (waitVSync/flip/flush/
+		// enableSpinner/disableSpinner/incrementSpinner) never allocated
+		// anything; sendShow/sendHide (and, under USE_LIBVUGLES2,
+		// sendShowItem/setFlush/setView) did, but exec() doesn't free
+		// them either - see this function's comment.
+		break;
+	}
+}
+#endif
+
 gRC *gRC::instance = 0;
 
 gRC::gRC() : rp(0), wp(0)
@@ -73,6 +165,17 @@ DEFINE_REF(gRC);
 gRC::~gRC()
 {
 	instance = 0;
+#ifdef HAVE_E3_COMPD_CLIENT
+	// Disconnect BEFORE the shutdown submit() below, not after: clearing
+	// m_compClient here means that submit() call falls through to the
+	// normal local-queue path (see submit()'s own "if (m_compClient)"
+	// check) instead of being forwarded - which is what's needed, since
+	// the local render thread (the_thread, joined right below) keeps
+	// running even while in forwarding mode (see connectToCompositor()'s
+	// comment) and still needs a real local shutdown opcode to stop it.
+	delete m_compClient;
+	m_compClient = nullptr;
+#endif
 	gOpcode o;
 	o.opcode = gOpcode::shutdown;
 	submit(o);
@@ -83,8 +186,97 @@ gRC::~gRC()
 #endif
 }
 
+#ifdef HAVE_E3_COMPD_CLIENT
+bool gRC::connectToCompositor(const char *shmName, e3ipc::WireDcId dc)
+{
+	// Only meant to be called once, before the first submit() that
+	// should be forwarded (see this method's declaration in grc.h) - a
+	// second call here just replaces whatever connection existed, it
+	// doesn't attempt to migrate anything already in flight.
+	delete m_compClient;
+	m_compClient = new e3ipc::gShmOpcodeClient;
+	if (!m_compClient->connect(shmName, dc))
+	{
+		delete m_compClient;
+		m_compClient = nullptr;
+		return false;
+	}
+	return true;
+}
+#endif
+
 void gRC::submit(const gOpcode &o)
 {
+#ifdef HAVE_E3_COMPD_CLIENT
+	if (m_compClient)
+	{
+		// Fire-and-forget to the compositor process instead of this
+		// process's own local queue. Known, deliberately incomplete at
+		// this stage of the Enigma3 compositor split:
+		//  - The local render thread (the_thread) this constructor
+		//    already started keeps running regardless - it just never
+		//    sees anything (rp stays == wp forever) since nothing is
+		//    queued locally anymore. If HAVE_EGL is also enabled for
+		//    this build, thread()'s own gEGLDC::initEGL() call still
+		//    runs too, meaning a LOCAL EGL context would still get
+		//    created in this process alongside forwarding everything to
+		//    the compositor - not what you want. Actually removing the
+		//    local thread/EGL path for a build running in compositor
+		//    mode needs its own configure-time option (a UI build
+		//    without HAVE_EGL at all), out of scope for this method.
+		//  - There is no acknowledgment channel back from e3-compd yet -
+		//    submit() returning doesn't mean the opcode was rendered,
+		//    only that it was handed to the transport (or dropped, see
+		//    serializeOpcode()'s return value, currently ignored here).
+		m_compClient->submit(o);
+
+		switch (o.opcode)
+		{
+		case gOpcode::shutdown:
+			// No dc, no parm payload was ever allocated for this one
+			// (see gRC::~gRC()) - nothing to free.
+			break;
+		case gOpcode::notify:
+			// gRC::notify (the sigc signal eWidgetDesktop::notify is
+			// connected to, lib/gui/ewidgetdesktop.cpp:499) normally
+			// fires once thread()'s LOCAL queue has drained up to this
+			// opcode - meaningless here, since nothing is queued
+			// locally anymore. Firing it synchronously right here is a
+			// deliberate downgrade of what it means (from "the local
+			// queue drained up to here" to "this opcode was handed to
+			// the transport"), not a faithful reproduction - but
+			// eWidgetDesktop's sequencing needs SOME signal to proceed,
+			// and firing nothing at all would hang it outright. A real
+			// acknowledgment protocol from e3-compd is later work.
+			//
+			// Unlike thread()'s own notify handling (which leaves this
+			// dc ref unreleased - a pre-existing gap in the in-process
+			// path, see freeForwardedOpcodePayload()'s comment), this
+			// DOES release it: there's no compatibility reason to carry
+			// that leak into a brand new code path.
+			if (o.dc)
+				o.dc->Release();
+			notify();
+			break;
+		case gOpcode::setCompositing:
+			// Not part of gDC::exec()'s switch at all - thread() frees
+			// it itself before ever reaching o.dc->exec() (and this
+			// opcode has o.dc == 0 regardless, see gPainter::
+			// setCompositing()). Moot anyway: serializeOpcode() already
+			// declines setCompositing (dead code, see gwireopcode.h) -
+			// still released here for symmetry with thread()'s handling.
+			o.parm.setCompositing->Release();
+			break;
+		default:
+			if (o.dc)
+				o.dc->Release();
+			freeForwardedOpcodePayload(o);
+			break;
+		}
+		return;
+	}
+#endif
+
 	while (1)
 	{
 #ifndef SYNC_PAINT
