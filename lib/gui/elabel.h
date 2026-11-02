@@ -32,6 +32,10 @@ public:
 	void setBorderColor(const gRGB &col);
 	void setBorderWidth(int size);
 	void setNoWrap(int nowrap);
+	// a text that does not fit is cut and ends with an ellipsis (RT_ELLIPSIS, see eTextPara::renderStringEllipsis);
+	// on by default, setEllipsis(0) (skin: ellipsis="0") shows it clipped instead
+	void setEllipsis(int ellipsis);
+	int getEllipsis() { return m_ellipsis; }
 	void setAlphatest(int alphatest);
 	void clearForegroundColor();
 	int getNoWrap() { return m_nowrap; }
@@ -50,6 +54,7 @@ private:
 	ePoint m_shadow_offset;
 	int m_border_size;
 	int m_nowrap;
+	int m_ellipsis = 1;
 	bool m_blend = false;
 
 	enum eLabelEvent

@@ -89,6 +89,10 @@ struct eListboxStyle
 		alignBlock
 	};
 	int m_valign, m_halign, m_border_size, m_scrollbarborder_width;
+	// texts of the list that do not fit their field end with an ellipsis (RT_ELLIPSIS), in all contents (string, config,
+	// python/template text fields); on by default, skin ellipsis="0" shows them clipped instead
+	// NOTE: no apostrophes in comments of lib/gui/*.h, actions/parseactions.py cannot tokenize them and drops all actions behind
+	int m_ellipsis;
 	ePtr<gFont> m_font, m_secondfont;
 	ePoint m_text_offset;
 	int m_itemCornerRadius[2];
@@ -188,6 +192,7 @@ public:
 	void setVAlign(int align);
 	void setHAlign(int align);
 	void setTextOffset(const ePoint &textoffset);
+	void setEllipsis(int ellipsis);
 
 	void setScrollbarWidth(int width);
 	void setScrollbarHeight(int size);
