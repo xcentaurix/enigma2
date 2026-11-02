@@ -357,6 +357,9 @@ void eListboxPythonStringContent::paint(gPainter &painter, eWindowStyle &style, 
 					flags |= gPainter::RT_HALIGN_BLOCK;
 			}
 
+			if (local_style && local_style->m_ellipsis)
+				flags |= gPainter::RT_ELLIPSIS;
+
 			// Here we have to compensate the local style text offset from both sides
 			painter.renderText(eRect(text_offset.x(), text_offset.y(), m_itemsize.width() - style_text_offset.x()*2, m_itemsize.height() - style_text_offset.y()*2), string, flags, border_color, border_size);
 		}
@@ -434,6 +437,15 @@ void eListboxPythonStringContent::invalidate()
 //////////////////////////////////////
 
 RESULT SwigFromPython(ePtr<gPixmap> &res, PyObject *obj);
+
+	/* the width a text on one line needs, measured like the ellipsis measures what fits */
+static int getTextWidth(gFont *font, const char *text)
+{
+	eTextPara para(eRect(0, 0, 32767, 32767));
+	para.setFont(font);
+	para.renderString(text, 0);
+	return para.getAdvanceWidth();
+}
 
 void eListboxPythonConfigContent::paint(gPainter &painter, eWindowStyle &style, const ePoint &offset, int selected)
 {
@@ -573,6 +585,10 @@ void eListboxPythonConfigContent::paint(gPainter &painter, eWindowStyle &style, 
 			text = PyTuple_GET_ITEM(item, 0);
 			text = PyObject_Str(text); /* creates a new object - old object was borrowed! */
 			const char *string = (text && PyUnicode_Check(text)) ? PyUnicode_AsUTF8(text) : "<not-a-string>";
+				/* the area of the value text (the rect of the original layout: it ends 15 pixels before the right edge),
+				   and with the ellipsis the flag for it */
+			eRect value_rect(ePoint(offset.x()-15, offset.y()), m_itemsize);
+			int value_ellipsis = 0;
 			if (!strcmp(string,"---") && PyTuple_Size(item) == 1) {
 				sep = true;
 				if (m_sepline_color_set) {
@@ -581,14 +597,6 @@ void eListboxPythonConfigContent::paint(gPainter &painter, eWindowStyle &style, 
 				//eDebug("[CONFIGCONTENT] Go to step 1 fill line thick: %d; at pos x: %d, y: %d, w: %d, h: %d", m_sepline_thickness, offset.x() + 15, offset.y() + (m_itemsize.height() - m_sepline_thickness)/2, m_itemsize.width() - 30, m_sepline_thickness);
 				painter.fill(eRect(offset.x()+15, offset.y() + (m_itemsize.height() - m_sepline_thickness)/2, m_itemsize.width() - 30, m_sepline_thickness));
 			} else {
-				painter.renderText(eRect(ePoint(offset.x()+15, offset.y()), m_itemsize), string, alphablendflag | gPainter::RT_HALIGN_LEFT | gPainter::RT_VALIGN_CENTER, border_color, border_size);
-			}
-			Py_XDECREF(text);
-			if (!sep) {
-					/* when we have no label, align value to the left. (FIXME:
-					   don't we want to specifiy this individually?) */
-				int value_alignment_left = !*string;
-
 					/* now, handle the value. get 2nd part from tuple*/
 				if (PyTuple_Size(item) >= 2) // when no 2nd entry is in tuple this is a non selectable entry without config part
 					value = PyTuple_GET_ITEM(item, 1);
@@ -608,6 +616,66 @@ void eListboxPythonConfigContent::paint(gPainter &painter, eWindowStyle &style, 
 						/* the PyInt was stolen. */
 				}
 
+				eRect text_rect(ePoint(offset.x()+15, offset.y()), m_itemsize);
+				int text_ellipsis = 0;
+				if (local_style && local_style->m_ellipsis)
+				{
+						/* The value is known before the label is drawn, because they share the row: the label needs
+						   room for the value text and the value text needs room for the label. Both are kept whole if
+						   they fit, else the one that fits half the row is kept and the other gets the rest, else both
+						   get half. */
+					const char *value_text = 0;
+					if (value && PyTuple_Check(value) && PyTuple_Size(value) >= 2)
+					{
+						ePyObject type = PyTuple_GET_ITEM(value, 0);
+						ePyObject pvalue = PyTuple_GET_ITEM(value, 1);
+						if (type && PyUnicode_Check(type) && !strcmp(PyUnicode_AsUTF8(type), "text") && pvalue && PyUnicode_Check(pvalue))
+							value_text = PyUnicode_AsUTF8(pvalue);
+					}
+					int avail = m_itemsize.width() - 30;
+					int text_need = *string ? getTextWidth(fnt, string) : 0;
+					int value_need = (value_text && *value_text) ? getTextWidth(fnt2, value_text) : 0;
+					int text_area = avail, value_area = avail;
+					if (text_need + value_need > avail)
+					{
+						int half = avail / 2;
+						if (!value_need)
+							text_area = avail;
+						else if (!text_need)
+							value_area = avail;
+						else if (text_need <= half)
+						{
+							text_area = text_need;
+							value_area = avail - text_need;
+						}
+						else if (value_need <= half)
+						{
+							value_area = value_need;
+							text_area = avail - value_need;
+						}
+						else
+							text_area = value_area = half;
+					}
+					else
+					{
+							/* it all fits: the label keeps its width, the value gets what is left of the row */
+						text_area = text_need;
+						value_area = avail - text_need;
+					}
+					text_rect = eRect(ePoint(offset.x()+15, offset.y()), eSize(text_area, m_itemsize.height()));
+					text_ellipsis = gPainter::RT_ELLIPSIS;
+					value_ellipsis = gPainter::RT_ELLIPSIS;
+					if (*string)
+						value_rect = eRect(ePoint(offset.x() + m_itemsize.width() - 15 - value_area, offset.y()), eSize(value_area, m_itemsize.height()));
+				}
+				painter.renderText(text_rect, string, alphablendflag | text_ellipsis | gPainter::RT_HALIGN_LEFT | gPainter::RT_VALIGN_CENTER, border_color, border_size);
+			}
+			Py_XDECREF(text);
+			if (!sep) {
+					/* when we have no label, align value to the left. (FIXME:
+					   don't we want to specifiy this individually?) */
+				int value_alignment_left = !*string;
+
 					/*  check if this is really a tuple */
 				if (value && PyTuple_Check(value))
 				{
@@ -623,9 +691,9 @@ void eListboxPythonConfigContent::paint(gPainter &painter, eWindowStyle &style, 
 							const char *value = (pvalue && PyUnicode_Check(pvalue)) ? PyUnicode_AsUTF8(pvalue) : "<not-a-string>";
 							painter.setFont(fnt2);
 							if (value_alignment_left)
-								painter.renderText(eRect(ePoint(offset.x()-15, offset.y()), m_itemsize), value, alphablendflag | gPainter::RT_HALIGN_LEFT | gPainter::RT_VALIGN_CENTER, border_color, border_size);
+								painter.renderText(value_rect, value, alphablendflag | value_ellipsis | gPainter::RT_HALIGN_LEFT | gPainter::RT_VALIGN_CENTER, border_color, border_size);
 							else
-								painter.renderText(eRect(ePoint(offset.x()-15, offset.y()), m_itemsize), value, alphablendflag | gPainter::RT_HALIGN_RIGHT| gPainter::RT_VALIGN_CENTER, border_color, border_size);
+								painter.renderText(value_rect, value, alphablendflag | value_ellipsis | gPainter::RT_HALIGN_RIGHT| gPainter::RT_VALIGN_CENTER, border_color, border_size);
 
 								/* pvalue is borrowed */
 						} else if (!strcmp(atype, "slider"))
@@ -1372,6 +1440,8 @@ void eListboxPythonMultiContent::paint(gPainter &painter, eWindowStyle &style, c
 
 				unsigned int textBColor = pTextBorderColor ? PyLong_AsUnsignedLongMask(pTextBorderColor) : 0x000000;
 				painter.setFont(m_font[fnt]);
+				if (!local_style || local_style->m_ellipsis)
+					flags |= gPainter::RT_ELLIPSIS;
 				painter.renderText(rect, string, flags, gRGB(textBColor), btwidth);
 				painter.clippop();
 

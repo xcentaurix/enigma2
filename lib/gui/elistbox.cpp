@@ -14,6 +14,7 @@ eListbox::eListbox(eWidget *parent) :
 {
 	memset(static_cast<void*>(&m_style), 0, sizeof(m_style));
 	m_style.m_text_offset = ePoint(1,1);
+	m_style.m_ellipsis = 1;
 
 	for (int x = 0; x < 4; x++) 
 	{
@@ -1286,6 +1287,15 @@ void eListbox::setHAlign(int align)
 void eListbox::setTextOffset(const ePoint &textoffset)
 {
 	m_style.m_text_offset = textoffset;
+}
+
+void eListbox::setEllipsis(int ellipsis)
+{
+	if (m_style.m_ellipsis != ellipsis)
+	{
+		m_style.m_ellipsis = ellipsis;
+		invalidate();
+	}
 }
 
 void eListbox::setBackgroundColor(const gRGB &col)

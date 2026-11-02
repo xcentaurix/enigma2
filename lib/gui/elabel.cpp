@@ -17,6 +17,7 @@ eLabel::eLabel(eWidget *parent, int markedPos): eWidget(parent)
 	m_have_shadow_color = 0;
 
 	m_nowrap = 0;
+	m_ellipsis = 1;
 	m_border_size = 0;
 }
 
@@ -39,7 +40,9 @@ int eLabel::event(int event, void *data, void *data2)
 			style->setStyle(painter, eWindowStyle::styleLabel);
 			ePtr<eTextPara> para = new eTextPara(eRect(0, 0, size().width(), size().height()));
 			para->setFont(m_font);
-			para->renderString(m_text.empty()?0:m_text.c_str(), 0);
+			// the character under the cursor (m_pos) must stay, the ellipsis only cuts what is behind it
+			para->setEllipsisKeep(m_pos >= 0 ? m_pos + 1 : 0);
+			para->renderString(m_text.empty()?0:m_text.c_str(), m_ellipsis ? RS_ELLIPSIS : 0);
 
 			if (m_halign == alignLeft)
 				para->realign(eTextPara::dirLeft);
@@ -109,6 +112,9 @@ int eLabel::event(int event, void *data, void *data2)
 
 			if (!m_nowrap)
 				flags |= gPainter::RT_WRAP;
+
+			if (m_ellipsis)
+				flags |= gPainter::RT_ELLIPSIS;
 
 				/* text needs to blend against the real pixels behind it -- not just the
 				   widget's own nominal background color -- whenever that nominal color
@@ -231,6 +237,15 @@ void eLabel::setNoWrap(int nowrap)
 	if (m_nowrap != nowrap)
 	{
 		m_nowrap = nowrap;
+		invalidate();
+	}
+}
+
+void eLabel::setEllipsis(int ellipsis)
+{
+	if (m_ellipsis != ellipsis)
+	{
+		m_ellipsis = ellipsis;
 		invalidate();
 	}
 }
