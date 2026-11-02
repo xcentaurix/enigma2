@@ -89,6 +89,8 @@ public:
 #define RS_DOT 2
 #define RS_DIRECT 4
 #define RS_FADE 8
+/* A text that doesn't fit the area is cut and ends with an ellipsis ("…"), see eTextPara::renderStringEllipsis. */
+#define RS_ELLIPSIS 16
 
 #define GS_ISSPACE 1
 #define GS_ISFIRST 2
@@ -153,18 +155,34 @@ class eTextPara: public iObject
 	// blit() needs it to build a GPU-atlas cache key for i->image/i->borderimage
 	// that's actually unique to this border size (see blit()'s comment there).
 	int m_border_width;
+	// where the text started (the start point the para was made with): reset() and the probes of the ellipsis begin there
+	ePoint m_start;
+	// the first characters of the text an ellipsis must never cut off (the character under the cursor of an Input)
+	int m_ellipsis_keep;
 
 	int appendGlyph(Font *current_font, FT_Face current_face, FT_UInt glyphIndex, int flags, int rflags, int border, bool last,
 			bool activate_newcolor, unsigned long newcolor);
 	void newLine(int flags);
 	void setFont(Font *font, Font *replacement_font, Font *fallback_font);
 	void calc_bbox();
+
+	// renderString() without the ellipsis: the layout of the text as it is
+	int renderStringPlain(const char *string, int flags, int border);
+	// renderString() with RS_ELLIPSIS: the plain layout if it fits the area, else the text cut so that it and the ellipsis do
+	int renderStringEllipsis(const char *string, int flags, int border);
+	// does what is laid out fit the area: the width, and the height if there is more than one line (one line always does)
+	bool fitsArea();
+	// is there a glyph for the character in one of the fonts
+	bool hasGlyph(unsigned long chr);
+	// takes back what was laid out, the fonts stay
+	void reset();
 public:
 	eTextPara(eRect area, ePoint start=ePoint(-1, -1))
 		: current_font(0), replacement_font(0), current_face(0), replacement_face(0),
 		fallback_font(0), fallback_face(0),
 		area(area), cursor(start), maximum(0, 0), left(start.x()), charCount(0), totalheight(0),
-		bboxValid(0), doTopBottomReordering(false), m_blend(false), m_border_width(0)
+		bboxValid(0), doTopBottomReordering(false), m_blend(false), m_border_width(0),
+		m_start(start), m_ellipsis_keep(0)
 	{
 	}
 	virtual ~eTextPara();
@@ -176,6 +194,15 @@ public:
 
 	void setFont(const gFont *font);
 	int renderString(const char *string, int flags=0, int border=0);
+
+	// With RS_ELLIPSIS in the flags of renderString(): the number of characters from the start of the text that the cut
+	// leaves (the cursor of an Input is on the last of them). The cut never goes into them: if the text doesn't fit with
+	// them, they are shown (clipped) and the ellipsis follows.
+	void setEllipsisKeep(int keep) { m_ellipsis_keep = keep; }
+
+	// the width the laid out text needs, from the left edge of the area to the advance end of its longest line (what the
+	// ellipsis compares with the area)
+	int getAdvanceWidth();
 
 	void clear();
 
