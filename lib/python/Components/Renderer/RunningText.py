@@ -83,6 +83,7 @@ class RunningText(Renderer):
 		self.instance.move(ePoint(0, 0))
 		self.instance.resize(eSize(self.W, self.H))
 		self.scroll_label = eLabel(instance)
+		self.scroll_label.setEllipsis(0)  # the text scrolls, it is never cut
 		self.mTimer = eTimer()
 		self.mTimer.callback.append(self.movingLoop)
 

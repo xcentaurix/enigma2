@@ -65,6 +65,7 @@ class ScrollLabel(GUIComponent):
 					self.split = 1 if value.lower() in ("1", "enabled", "on", "split", "true", "yes") else 0
 					if self.split:
 						self.right_text = eLabel(self.instance)
+						self.right_text.setEllipsis(0)
 					self.skinAttributes.remove((attrib, value))
 				elif attrib == "colposition":
 					self.column = skin.parseScale(value)
@@ -173,6 +174,7 @@ class ScrollLabel(GUIComponent):
 		self.instance = eWidget(parent)
 		self.scrollbar = eSlider(self.instance)
 		self.long_text = eLabel(self.instance)
+		self.long_text.setEllipsis(0)  # the text scrolls, it is never cut
 
 	def GUIdelete(self):
 		self.long_text = None
