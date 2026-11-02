@@ -1,4 +1,5 @@
 #include <lib/gdi/font.h>
+#include <lib/gdi/ellipsis.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -643,6 +644,109 @@ void
 shape (std::vector<unsigned long> &string, const std::vector<unsigned long> &text);
 
 int eTextPara::renderString(const char *string, int rflags, int border)
+{
+	// RS_DIRECT texts are glyph indexes, not characters: there is nothing to cut at
+	if ((rflags & RS_ELLIPSIS) && !(rflags & RS_DIRECT))
+		return renderStringEllipsis(string, rflags & ~RS_ELLIPSIS, border);
+	return renderStringPlain(string, rflags & ~RS_ELLIPSIS, border);
+}
+
+/*
+	The ellipsis: a text that doesn't fit the area is cut and ends with an ellipsis. What fits is a question of the layout,
+	so this tries: the text is laid out as it is and if it doesn't fit, the cuts the rules (ellipsis.h) allow are laid out
+	in a binary search, each in a para of its own (the layout of a prefix can differ from the part of the layout of the
+	text: shaping, kerning, the wrap), until the largest cut that fits with the ellipsis is found. That one is laid out
+	into this para. A text that fits costs one layout, like without the ellipsis.
+
+	This can't hold ftlock (renderStringPlain takes it, it is not recursive): the probes are paras of their own.
+*/
+int eTextPara::renderStringEllipsis(const char *string, int rflags, int border)
+{
+	int result = renderStringPlain(string, rflags, border);
+	if (result || fitsArea())
+		return result;
+
+	const std::string text = string ? string : "";
+	std::vector<unsigned int> cps;
+	std::vector<size_t> offsets;
+	ellipsis::decode(text.c_str(), cps, offsets);
+	const std::vector<size_t> cuts = ellipsis::cutPoints(cps, m_ellipsis_keep > 0 ? m_ellipsis_keep : 0);
+	if (cuts.empty())
+		return result; // nothing that may be cut off: it stays clipped
+
+	const bool font_has_ellipsis = hasGlyph(ellipsis::ELLIPSIS);
+	auto cutText = [&](size_t cut)
+	{
+		return text.substr(0, offsets[cut]) + ellipsis::suffixFor(cps, cut, font_has_ellipsis);
+	};
+	auto fits = [&](size_t cut)
+	{
+		eTextPara probe(area, m_start);
+		probe.setFont(current_font, replacement_font, fallback_font);
+		return probe.renderStringPlain(cutText(cut).c_str(), rflags, border) == 0 && probe.fitsArea();
+	};
+
+	// if not even the smallest cut fits, that one is shown, clipped: only the ellipsis, or the text up to the cursor
+	int best = ellipsis::searchLargest(cuts, fits);
+	size_t cut = cuts[best < 0 ? 0 : best];
+
+	reset();
+	return renderStringPlain(cutText(cut).c_str(), rflags, border);
+}
+
+bool eTextPara::fitsArea()
+{
+	if (glyphs.empty())
+		return true;
+	// one line always fits (it is clipped like any text); the height counts for more, if the para started at its top
+	if (lineOffsets.size() > 1 && m_start.y() == -1 && totalheight > area.height())
+		return false;
+	return area.left() + getAdvanceWidth() <= area.right();
+}
+
+int eTextPara::getAdvanceWidth()
+{
+	// the width of the longest line, by the advance of the glyphs (the bounding box is by the bitmaps, a few pixels more),
+	// spaces at the end of a line don't count (they are not drawn, and calc_bbox() skips them as well)
+	int right = area.left();
+	for (glyphString::const_iterator i(glyphs.begin()); i != glyphs.end(); ++i)
+		if (!(i->flags & (GS_ISSPACE | GS_SOFTHYPHEN)) && i->x + i->w > right)
+			right = i->x + i->w;
+	return right - area.left();
+}
+
+bool eTextPara::hasGlyph(unsigned long chr)
+{
+	singleLock s(ftlock);
+	return (current_face && FT_Get_Char_Index(current_face, chr))
+		|| (replacement_face && FT_Get_Char_Index(replacement_face, chr))
+		|| (fallback_face && FT_Get_Char_Index(fallback_face, chr));
+}
+
+void eTextPara::reset()
+{
+	singleLock s(ftlock);
+
+	for (unsigned int i = 0; i < glyphs.size(); i++)
+	{
+		if (glyphs[i].image) FT_Done_Glyph(glyphs[i].image);
+		if (glyphs[i].borderimage) FT_Done_Glyph(glyphs[i].borderimage);
+	}
+	glyphs.clear();
+	lineOffsets.clear();
+	lineChars.clear();
+	charCount = 0;
+	totalheight = 0;
+	bboxValid = 0;
+	boundBox = eRect();
+	doTopBottomReordering = false;
+	maximum = eSize(0, 0);
+	cursor = m_start;
+	left = m_start.x();
+	previous = 0;
+}
+
+int eTextPara::renderStringPlain(const char *string, int rflags, int border)
 {
 	singleLock s(ftlock);
 

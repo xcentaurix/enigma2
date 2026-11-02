@@ -896,37 +896,14 @@ void gDC::exec(const gOpcode *o)
 		ASSERT(m_current_font);
 		para->setFont(m_current_font);
 
-		std::string dots = reinterpret_cast<const char*>(u8"…");
-
+		// RT_ELLIPSIS: a text that doesn't fit the area (the width, with RT_WRAP the lines that fit the height) is cut and
+		// ends with an ellipsis, see eTextPara::renderStringEllipsis
+		int renderflags = 0;
+		if (flags & gPainter::RT_WRAP)
+			renderflags |= RS_WRAP;
 		if (flags & gPainter::RT_ELLIPSIS)
-		{
-			if (flags & gPainter::RT_WRAP) // Remove wrap
-				flags -= gPainter::RT_WRAP;
-			std::string text = o->parm.renderText->text;
-			
-			text += dots;
-
-			eTextPara testpara(o->parm.renderText->area);
-			testpara.setFont(m_current_font);
-			testpara.renderString(text.c_str(), 0);
-			int bw = testpara.getBoundBox().width();
-			int w = o->parm.renderText->area.width();
-			if (bw > w) // Available space not fit
-			{
-				float pers = (float)w / (float)bw;
-				text = o->parm.renderText->text;
-				int ns = text.size() * pers;
-				if ((int)text.size() > ns)
-				{
-					text.resize(ns);
-					text += dots;
-				}
-				if (o->parm.renderText->text)
-					free(o->parm.renderText->text);
-				o->parm.renderText->text = strdup(text.c_str());
-			}
-		}
-		para->renderString(o->parm.renderText->text, (flags & gPainter::RT_WRAP) ? RS_WRAP : 0, o->parm.renderText->border);
+			renderflags |= RS_ELLIPSIS;
+		para->renderString(o->parm.renderText->text, renderflags, o->parm.renderText->border);
 
 		if (o->parm.renderText->text)
 			free(o->parm.renderText->text);
